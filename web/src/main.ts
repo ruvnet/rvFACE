@@ -8,10 +8,11 @@
 import './style.css';
 import type { BackendKind, EngineFactory, RvFaceEngine, WeightBundle } from './engine';
 import { loadWasmFactory } from './engine-wasm';
-import { loadWeights } from './weights';
+import { combineWeights, loadWeights, type UserWeights, type WeightBase } from './weights';
 import { AnalyzePane } from './ui/analyze';
 import { ComparePane } from './ui/compare';
 import { StatusBar } from './ui/statusbar';
+import { WeightsPanel } from './ui/weights-panel';
 
 function hasWebGpu(): boolean {
   return 'gpu' in navigator && (navigator as { gpu?: unknown }).gpu != null;
@@ -41,8 +42,13 @@ const status = new StatusBar(document.querySelector('#statusbar')!);
 let engine: RvFaceEngine | null = null;
 let factory: EngineFactory | null = null;
 let weights: WeightBundle | null = null;
+let weightsPanel: WeightsPanel | null = null;
 let requestedBackend: BackendKind = hasWebGpu() ? 'webgpu' : 'cpu';
 let initSeq = 0;
+
+/** Thrown by `resolveFactory` when the demo is waiting for the user to
+ *  supply the non-redistributable weights — a normal state, not an error. */
+class AwaitingWeightsError extends Error {}
 
 const getEngine = () => engine;
 const analyzePane = new AnalyzePane(document.querySelector('#analyze-pane')!, getEngine, status);
@@ -87,19 +93,47 @@ async function resolveFactory(): Promise<{ factory: EngineFactory; weights: Weig
   }
 
   status.log('wasm module loaded — fetching weights…');
-  let bundle: WeightBundle;
+  let result: Awaited<ReturnType<typeof loadWeights>>;
   try {
-    bundle = await loadWeights((p) => status.weightProgress(p));
+    result = await loadWeights((p) => status.weightProgress(p));
   } catch (err) {
-    showFatalError('model weights missing', [
+    // The redistributable base (detector + manifests) is unreachable — a
+    // genuinely broken deployment, not the expected "user must supply weights".
+    showFatalError('model base missing', [
       'python3 tools/fetch_and_convert.py',
-      './web/build-wasm.sh  # copies models/ into web/public/models/',
+      './web/build-wasm.sh  # copies the detector + manifests into web/public/models/',
     ]);
     throw err;
   }
+
   factory = wasmFactory;
-  weights = bundle;
-  return { factory, weights };
+
+  if (result.kind === 'complete') {
+    weights = result.bundle;
+    return { factory, weights };
+  }
+
+  // Detector loaded, but the non-redistributable landmark + embedder weights
+  // are absent (the public Pages demo). Collect them from the user, then init.
+  status.log(
+    `detector loaded; awaiting non-redistributable weights (${result.missing.join(', ')})`,
+    'warn',
+  );
+  showWeightsPanel(result.base);
+  throw new AwaitingWeightsError('awaiting user-supplied weights');
+}
+
+/** Render the drop-zone panel for the two non-redistributable weights. */
+function showWeightsPanel(base: WeightBase): void {
+  if (weightsPanel) return;
+  weightsPanel = new WeightsPanel(app, status, (user: UserWeights) => {
+    weights = combineWeights(base, user);
+    weightsPanel?.unmount();
+    weightsPanel = null;
+    status.log('weights complete — starting engine…');
+    void initEngine(requestedBackend);
+  });
+  weightsPanel.mount();
 }
 
 async function initEngine(backend: BackendKind): Promise<void> {
@@ -122,6 +156,7 @@ async function initEngine(backend: BackendKind): Promise<void> {
     await analyzePane.reanalyze();
     comparePane.update();
   } catch (err) {
+    if (err instanceof AwaitingWeightsError) return; // panel is up; not an error
     status.log(`engine init failed: ${err instanceof Error ? err.message : err}`, 'error');
   }
 }
