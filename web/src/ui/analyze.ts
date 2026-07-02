@@ -25,6 +25,7 @@ export class AnalyzePane {
   private lastFrameTime = 0;
   private fpsEma = 0;
   private lastImage: ImageBitmap | null = null;
+  private previewOnlyNoted = false;
 
   constructor(
     root: HTMLElement,
@@ -157,6 +158,20 @@ export class AnalyzePane {
       const fps = 1000 / Math.max(dt, 1);
       this.fpsEma = this.fpsEma === 0 ? fps : this.fpsEma * 0.9 + fps * 0.1;
       this.status.setFrameMetrics({ latencyMs: latency, fps: this.fpsEma });
+    } else if (vw > 0 && vh > 0) {
+      // Engine not ready (e.g. awaiting the drop-zone weights): still render
+      // the raw camera preview so the user sees a live picture instead of a
+      // blank pane. Detection overlays start automatically once the engine
+      // arrives — getEngine() is re-evaluated every frame.
+      this.showCanvas(vw, vh);
+      this.ctx.drawImage(this.video, 0, 0, vw, vh);
+      if (!this.previewOnlyNoted) {
+        this.previewOnlyNoted = true;
+        this.status.log(
+          'webcam preview only — engine not ready (add the remaining weights to enable detection)',
+          'warn',
+        );
+      }
     }
 
     // Schedule the next frame only after this one fully finished, so a slow
