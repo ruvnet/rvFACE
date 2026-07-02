@@ -4,6 +4,7 @@
  */
 
 import type { FaceResult } from '../engine';
+import { estimateExpression } from './expression';
 
 const BOX_COLOR = '#4ade80';
 const LANDMARK_COLOR = '#38bdf8';
@@ -16,13 +17,14 @@ const DEG = Math.PI / 180;
 /** Draw all faces onto `ctx` (which must already be sized to the image). */
 export function drawFaces(ctx: CanvasRenderingContext2D, faces: FaceResult[]): void {
   for (const face of faces) {
-    drawBox(ctx, face);
+    const expr = estimateExpression(face.landmarks);
+    drawBox(ctx, face, `${face.score.toFixed(3)} · ${expr.label}`);
     drawLandmarks(ctx, face.landmarks);
     drawPoseGizmo(ctx, face);
   }
 }
 
-function drawBox(ctx: CanvasRenderingContext2D, face: FaceResult): void {
+function drawBox(ctx: CanvasRenderingContext2D, face: FaceResult, label: string): void {
   const [x1, y1, x2, y2] = face.box;
   const w = x2 - x1;
   const h = y2 - y1;
@@ -33,8 +35,7 @@ function drawBox(ctx: CanvasRenderingContext2D, face: FaceResult): void {
   ctx.lineWidth = lw;
   ctx.strokeRect(x1, y1, w, h);
 
-  // Score label, kept inside the canvas.
-  const label = face.score.toFixed(3);
+  // Score + expression label, kept inside the canvas.
   const fontPx = Math.max(11, lw * 8);
   ctx.font = `${fontPx}px ui-monospace, monospace`;
   const tw = ctx.measureText(label).width;
