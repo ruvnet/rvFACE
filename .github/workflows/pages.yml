@@ -1,0 +1,107 @@
+name: Deploy web demo to GitHub Pages
+
+# Builds the wasm engine + Vite web UI and publishes web/dist to Pages.
+# Ships only the redistributable detector (MIT) + arch manifests; the
+# landmark/embedder weights have no upstream LICENSE (ADR-0003) and are never
+# deployed — the UI collects them from the user via a drop-zone at runtime.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# Least privilege + the Pages OIDC deploy needs id-token.
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# One in-flight Pages deploy at a time; let a newer push cancel an older run.
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust (wasm32 target)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Cache cargo build + registry
+        uses: Swatinem/rust-cache@v2
+
+      - name: Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      # cargo test gate — first CI for this repo (deep-review finding #2).
+      - name: cargo test --workspace
+        run: cargo test --workspace --locked
+
+      # wasm-opt for build-wasm.sh's size-gate step.
+      - name: Install binaryen (wasm-opt)
+        run: sudo apt-get update && sudo apt-get install -y binaryen
+
+      # Pin wasm-bindgen-cli to the exact version in Cargo.lock; cache the
+      # installed binary so we only pay the compile once per version bump.
+      - name: Resolve wasm-bindgen version
+        id: wb
+        run: |
+          ver=$(awk '/name = "wasm-bindgen"/{f=1} f&&/version = /{gsub(/[",]/,"",$3);print $3;exit}' Cargo.lock)
+          echo "version=$ver" >> "$GITHUB_OUTPUT"
+          echo "wasm-bindgen $ver"
+
+      - name: Cache wasm-bindgen-cli
+        id: wbcache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/wasm-bindgen
+          key: wasm-bindgen-cli-${{ steps.wb.outputs.version }}
+
+      - name: Install wasm-bindgen-cli
+        if: steps.wbcache.outputs.cache-hit != 'true'
+        run: cargo install wasm-bindgen-cli --version ${{ steps.wb.outputs.version }} --locked
+
+      # Builds wasm (cpu+webgpu), enforces the 3.5 MiB gzip budget, and syncs
+      # the committed detector + manifests into web/public/models/. The two
+      # non-redistributable weights are absent here, which build-wasm.sh warns
+      # about (not fatal) — the deployed demo is detector + drop-zone.
+      - name: Build wasm engine
+        run: ./web/build-wasm.sh
+
+      - name: Build web UI
+        working-directory: web
+        run: |
+          npm ci
+          npm run build
+
+      # Guard: fail the deploy if a non-redistributable weight ever reaches dist.
+      - name: Assert no non-redistributable weights in dist
+        run: |
+          if find web/dist \( -name 'landmark-mfn68.safetensors' -o -name 'embedder-mfn.safetensors' \) -print | grep .; then
+            echo "::error::non-redistributable weights found in web/dist — refusing to deploy"
+            exit 1
+          fi
+          echo "dist clean — only the redistributable detector + manifests ship"
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: web/dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
