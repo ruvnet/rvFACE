@@ -193,10 +193,12 @@ export class AnalyzePane {
     }
     const f = faces[0]!;
     const [x1, y1, x2, y2] = f.box;
+    const pose = f.pose
+      ? `yaw ${f.pose.yaw.toFixed(1)}° pitch ${f.pose.pitch.toFixed(1)}° roll ${f.pose.roll.toFixed(1)}°`
+      : 'pose n/a (detect-only — drop the landmark weights)';
     this.info.textContent =
       `${faces.length} face(s) · best score ${f.score.toFixed(3)} · ` +
       `box [${x1.toFixed(0)}, ${y1.toFixed(0)}, ${x2.toFixed(0)}, ${y2.toFixed(0)}] · ` +
-      `yaw ${f.pose.yaw.toFixed(1)}° pitch ${f.pose.pitch.toFixed(1)}° roll ${f.pose.roll.toFixed(1)}° · ` +
-      `${latencyMs.toFixed(1)} ms`;
+      `${pose} · ${latencyMs.toFixed(1)} ms`;
   }
 }

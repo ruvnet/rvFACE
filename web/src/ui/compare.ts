@@ -140,7 +140,21 @@ export class ComparePane {
     if (!engine || !a || !b) {
       this.gaugeArc.setAttribute('stroke-dasharray', '0 100');
       this.gaugeScore.textContent = '—';
-      this.verdict.textContent = a || b ? 'awaiting second face' : 'awaiting both faces';
+      this.verdict.textContent =
+        engine?.mode === 'detect'
+          ? 'compare needs the landmark weights (drop-zone above)'
+          : a || b
+            ? 'awaiting second face'
+            : 'awaiting both faces';
+      this.verdict.className = 'verdict';
+      return;
+    }
+    // Detect-only faces carry no embeddings — comparison is impossible
+    // until the landmark weights arrive and the full engine restarts.
+    if (a.embedding.length === 0 || b.embedding.length === 0) {
+      this.gaugeArc.setAttribute('stroke-dasharray', '0 100');
+      this.gaugeScore.textContent = '—';
+      this.verdict.textContent = 'compare needs the landmark weights (drop-zone above)';
       this.verdict.className = 'verdict';
       return;
     }

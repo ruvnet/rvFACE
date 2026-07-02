@@ -11,6 +11,14 @@ export type BackendKind = 'cpu' | 'webgpu';
 /** Which implementation is behind the interface (shown in the status badge). */
 export type EngineKind = 'wasm';
 
+/**
+ * Pipeline completeness: `full` runs detect → landmarks → pose → align →
+ * embed; `detect` is the out-of-the-box partial mode (detector + embedder
+ * ship with the demo, the non-redistributable landmark weights are absent)
+ * — faces carry boxes + scores only.
+ */
+export type EngineMode = 'full' | 'detect';
+
 export interface Pose {
   /** Degrees. Positive yaw = face turned to its left (image right). */
   yaw: number;
@@ -23,11 +31,12 @@ export interface FaceResult {
   box: [number, number, number, number];
   /** Detector confidence, 0..1. */
   score: number;
-  /** 68 landmarks, packed [x0, y0, x1, y1, ...] — 136 floats, pixel space. */
+  /** 68 landmarks, packed [x0, y0, x1, y1, ...] — 136 floats, pixel space.
+   *  Empty in detect-only mode. */
   landmarks: Float32Array;
-  /** Head pose solved from the landmarks. */
-  pose: Pose;
-  /** L2-normalized feature embedding (upstream IRN-50 style). */
+  /** Head pose solved from the landmarks; null in detect-only mode. */
+  pose: Pose | null;
+  /** L2-normalized feature embedding. Empty in detect-only mode. */
   embedding: Float32Array;
 }
 
@@ -36,8 +45,11 @@ export interface RvFaceEngine {
   readonly backend: BackendKind;
   /** Which implementation this is. */
   readonly kind: EngineKind;
+  /** Pipeline completeness (`detect` = live boxes only, see EngineMode). */
+  readonly mode: EngineMode;
   /**
-   * Full pipeline: detect -> landmarks -> pose -> align -> embed.
+   * Full pipeline: detect -> landmarks -> pose -> align -> embed
+   * (detect-only in `detect` mode).
    * `rgba` is tightly-packed RGBA8, `width * height * 4` bytes.
    * Faces are returned sorted by score, at most `maxFaces`.
    */
@@ -57,14 +69,17 @@ export interface RvFaceEngine {
  * Raw safetensors bytes for the three networks plus the arch-manifest JSON
  * for the two manifest-configured nets, all fetched by `weights.ts` from
  * `/models/` (the detector arch is fixed slim-320; it needs no manifest).
+ * An **empty** `landmark` selects the wasm engine's detect-only partial
+ * mode (the demo out of the box).
  */
 export interface WeightBundle {
   detector: Uint8Array;
+  /** Empty Uint8Array = detect-only partial mode. */
   landmark: Uint8Array;
   embedder: Uint8Array;
   /** `landmark-mfn68.manifest.json` contents (arch hyperparameters). */
   landmarkManifest: string;
-  /** `embedder-mfn.manifest.json` contents (arch hyperparameters). */
+  /** `embedder-foamliu.manifest.json` contents (arch hyperparameters). */
   embedderManifest: string;
 }
 
