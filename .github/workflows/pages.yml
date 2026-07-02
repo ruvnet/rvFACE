@@ -44,9 +44,16 @@ jobs:
       - name: cargo test --workspace
         run: cargo test --workspace --locked
 
-      # wasm-opt for build-wasm.sh's size-gate step.
-      - name: Install binaryen (wasm-opt)
-        run: sudo apt-get update && sudo apt-get install -y binaryen
+      # wasm-opt for build-wasm.sh's size-gate step. Pinned to v130 (the version
+      # the build was verified with): Ubuntu's apt binaryen is too old for the
+      # wasm features rustc 1.96 emits by default (reference-types, multivalue…)
+      # and fails validation with "all used features should be allowed".
+      - name: Install binaryen (wasm-opt v130, pinned)
+        run: |
+          curl -fsSL -o /tmp/binaryen.tar.gz \
+            https://github.com/WebAssembly/binaryen/releases/download/version_130/binaryen-version_130-x86_64-linux.tar.gz
+          tar -xzf /tmp/binaryen.tar.gz -C /tmp
+          echo "/tmp/binaryen-version_130/bin" >> "$GITHUB_PATH"
 
       # Pin wasm-bindgen-cli to the exact version in Cargo.lock; cache the
       # installed binary so we only pay the compile once per version bump.
