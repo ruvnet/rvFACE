@@ -1,8 +1,8 @@
 /**
- * rvFACE web demo shell. Wires the real wasm engine to the three UI areas:
- * analyze pane, 1:1 compare pane and the status strip (ADR-0005). There is
- * no mock: a missing wasm build or missing weights renders an error state
- * with setup instructions.
+ * rvFACE web demo shell. Wires the real wasm engine to the UI: the 1:1
+ * compare pane (webcam or image vs a reference photo) and the status strip
+ * (ADR-0005). There is no mock: a missing wasm build or missing weights
+ * renders an error state with setup instructions.
  */
 
 import './style.css';
@@ -15,7 +15,6 @@ import {
   type UserWeights,
   type WeightBase,
 } from './weights';
-import { AnalyzePane } from './ui/analyze';
 import { ComparePane } from './ui/compare';
 import { StatusBar } from './ui/statusbar';
 import { WeightsPanel } from './ui/weights-panel';
@@ -28,16 +27,15 @@ const app = document.querySelector<HTMLElement>('#app')!;
 app.innerHTML = `
   <header class="topbar">
     <div class="brand">
-      <span class="brand-name">rvFACE</span>
+      <h1 class="brand-name">rvFACE</h1>
       <span class="brand-sub">Rust + WASM face recognition</span>
     </div>
     <div class="backend-toggle" role="group" aria-label="Compute backend">
-      <button type="button" data-backend="cpu">CPU</button>
-      <button type="button" data-backend="webgpu">WebGPU</button>
+      <button type="button" data-backend="cpu" aria-pressed="false">CPU</button>
+      <button type="button" data-backend="webgpu" aria-pressed="false">WebGPU</button>
     </div>
   </header>
   <main class="panes">
-    <section class="pane" id="analyze-pane"></section>
     <section class="pane" id="compare-pane"></section>
   </main>
   <footer class="statusbar" id="statusbar"></footer>
@@ -53,7 +51,6 @@ let requestedBackend: BackendKind = hasWebGpu() ? 'webgpu' : 'cpu';
 let initSeq = 0;
 
 const getEngine = () => engine;
-const analyzePane = new AnalyzePane(document.querySelector('#analyze-pane')!, getEngine, status);
 const comparePane = new ComparePane(document.querySelector('#compare-pane')!, getEngine, status);
 
 const backendButtons = Array.from(
@@ -62,7 +59,9 @@ const backendButtons = Array.from(
 
 function renderBackendToggle(): void {
   for (const btn of backendButtons) {
-    btn.classList.toggle('active', btn.dataset['backend'] === requestedBackend);
+    const active = btn.dataset['backend'] === requestedBackend;
+    btn.classList.toggle('active', active);
+    btn.setAttribute('aria-pressed', String(active));
   }
 }
 
@@ -164,8 +163,8 @@ async function initEngine(backend: BackendKind): Promise<void> {
             'drop the landmark weights for the full pipeline'
         : `engine ready: ${engine.kind} on ${engine.backend}`,
     );
-    await analyzePane.reanalyze();
     comparePane.update();
+    comparePane.notifyEngineReady();
   } catch (err) {
     status.log(`engine init failed: ${err instanceof Error ? err.message : err}`, 'error');
   }
