@@ -65,3 +65,18 @@ SIMD128 or WebGPU with automatic CPU fallback) — no mocks anywhere.
   landmark/embedder default weights are openly-licensed substitutes
   (upstream publishes only the detector's) and how to drop in the exact
   upstream IRN-50 embedder via `--irn50`.
+
+## License & responsible use
+
+Code is [MIT](LICENSE). **No model weights are redistributed** — the fetch
+tooling downloads third-party checkpoints (SHA-256-pinned) whose licensing is
+documented per-file in [`models/README.md`](models/README.md) and
+[ADR-0003](docs/adrs/0003-models-weights-licensing.md); review them before any
+commercial use.
+
+This is face-recognition software, i.e. biometric processing. It runs entirely
+locally (no telemetry, no network calls at inference). It is intended for
+consent-based applications — authentication, personal photo tooling, research.
+Do **not** use it for surveillance, tracking, or identification of people who
+have not consented, and check the biometric-data laws that apply in your
+jurisdiction (e.g. GDPR Art. 9, BIPA) before deployment.
