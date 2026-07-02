@@ -74,20 +74,40 @@ printf 'build-wasm: after  wasm-opt  raw=%d B  gzip=%d B\n' "$post_raw" "$post_g
 
 echo "== syncing weights + manifests into web/public/models/ =="
 mkdir -p "$WEB/public/models"
+
+# Redistributable base — the detector (MIT lineage) + both arch manifests
+# (repo-generated metadata). These are committed under web/public/models/ so
+# the public Pages demo ships them; a local fetch overwrites with fresh copies,
+# but an already-committed file also satisfies the requirement. Only a base
+# that is missing from BOTH locations is fatal.
 missing=0
-for f in detector-slim320.safetensors landmark-mfn68.safetensors \
-         embedder-mfn.safetensors landmark-mfn68.manifest.json \
+for f in detector-slim320.safetensors landmark-mfn68.manifest.json \
          embedder-mfn.manifest.json; do
   if [[ -f "$ROOT/models/$f" ]]; then
     cp -f "$ROOT/models/$f" "$WEB/public/models/$f"
     echo "  synced $f"
+  elif [[ -f "$WEB/public/models/$f" ]]; then
+    echo "  using committed web/public/models/$f"
   else
-    echo "  MISSING models/$f — run: python3 tools/fetch_and_convert.py" >&2
+    echo "  MISSING $f — run: python3 tools/fetch_and_convert.py" >&2
     missing=1
   fi
 done
 if (( missing )); then
-  echo "build-wasm: wasm built, but the UI cannot run without the weight files above" >&2
+  echo "build-wasm: the redistributable base above is required to ship the demo" >&2
   exit 1
 fi
+
+# Non-redistributable weights — the landmark + embedder checkpoints publish no
+# upstream LICENSE (ADR-0003 / models/README.md), so they are never committed
+# or deployed. Sync them locally when a fetch produced them (full engine out of
+# the box); otherwise the UI drop-zone collects them from the user at runtime.
+for f in landmark-mfn68.safetensors embedder-mfn.safetensors; do
+  if [[ -f "$ROOT/models/$f" ]]; then
+    cp -f "$ROOT/models/$f" "$WEB/public/models/$f"
+    echo "  synced $f (local only — git-ignored, never deployed)"
+  else
+    echo "  note: $f absent — demo ships detector-only; supply it via the UI drop-zone" >&2
+  fi
+done
 echo "build-wasm: done — wasm in web/src/wasm/, weights in web/public/models/"

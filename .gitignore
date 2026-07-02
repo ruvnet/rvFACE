@@ -11,5 +11,12 @@ models/*.safetensors
 models/*.onnx
 tools/fixtures/*.npz
 tools/.cache/
-web/public/models/
+# Public model assets: only the redistributable base is committed (ADR-0003) —
+# the detector (MIT lineage) + both arch manifests (repo-generated metadata).
+# The landmark + embedder safetensors have no upstream LICENSE, so they are
+# never committed or deployed; the Pages demo collects them via a drop-zone.
+web/public/models/*
+!web/public/models/detector-slim320.safetensors
+!web/public/models/landmark-mfn68.manifest.json
+!web/public/models/embedder-mfn.manifest.json
 web/src/wasm/

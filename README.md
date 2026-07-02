@@ -62,9 +62,12 @@ SIMD128 or WebGPU with automatic CPU fallback) — no mocks anywhere.
 - [Benchmarks](docs/BENCHMARKS.md): native analyze 176 ms, browser ~0.5 s
   (CPU; includes the 5× denormal-weight fix)
 - See [ADR-0003](docs/adrs/0003-models-weights-licensing.md) for why the
-  landmark/embedder default weights are openly-licensed substitutes
-  (upstream publishes only the detector's) and how to drop in the exact
-  upstream IRN-50 embedder via `--irn50`.
+  landmark/embedder default weights are openly-*obtainable* substitutes
+  (upstream publishes only the detector's). Note these two checkpoints have
+  **no upstream LICENSE file** ([`models/README.md`](models/README.md)), so —
+  unlike the MIT detector — they are never redistributed here: the tooling
+  fetches them locally and the web demo collects them via a drop-zone. See
+  also how to drop in the exact upstream IRN-50 embedder via `--irn50`.
 
 ## License & responsible use
 

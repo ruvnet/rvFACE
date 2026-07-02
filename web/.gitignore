@@ -1,4 +1,9 @@
 node_modules/
 dist/
-public/models/
+# Only the redistributable base is committed (ADR-0003): detector + manifests.
+# The landmark + embedder safetensors are never committed or deployed.
+public/models/*
+!public/models/detector-slim320.safetensors
+!public/models/landmark-mfn68.manifest.json
+!public/models/embedder-mfn.manifest.json
 src/wasm/

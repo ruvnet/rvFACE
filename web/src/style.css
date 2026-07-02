@@ -413,3 +413,99 @@ body {
   font-family: var(--mono);
   color: var(--accent);
 }
+
+/* Detector loaded, but the non-redistributable landmark + embedder weights
+   (ADR-0003) must be supplied by the user — a working, non-fatal state. */
+.weights-panel {
+  margin: 16px 24px 0;
+  padding: 14px 18px;
+  border: 1px solid var(--warn);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--warn) 8%, var(--bg-inset));
+  color: var(--text);
+  font-size: 13.5px;
+}
+
+.weights-panel strong {
+  color: var(--warn);
+  font-family: var(--mono);
+}
+
+.weights-panel p {
+  margin: 8px 0 0;
+  color: var(--text-dim);
+}
+
+.weights-panel code {
+  font-family: var(--mono);
+  color: var(--accent);
+}
+
+.weights-cmd {
+  margin: 10px 0 0;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-inset);
+  overflow-x: auto;
+}
+
+.weights-cmd code {
+  color: var(--text);
+  font-size: 12.5px;
+  white-space: pre;
+}
+
+.weights-slots {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.weights-slot {
+  flex: 1 1 260px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 12px 14px;
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  background: var(--bg-raised);
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+}
+
+.weights-slot:hover,
+.weights-slot.drag-over {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 8%, var(--bg-raised));
+}
+
+.weights-slot.ws-ok {
+  border-style: solid;
+  border-color: var(--good);
+}
+
+.ws-title code {
+  color: var(--text);
+}
+
+.ws-desc {
+  color: var(--text-dim);
+  font-size: 12px;
+}
+
+.ws-state {
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.weights-slot.ws-ok .ws-state {
+  color: var(--good);
+}
+
+.ws-state.ws-err {
+  color: var(--bad);
+}
