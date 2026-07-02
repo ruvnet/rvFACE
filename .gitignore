@@ -8,15 +8,21 @@ models/*.pth
 models/*.pth.tar
 models/*.npy
 models/*.safetensors
+# The foamliu embedder is Apache-2.0 (ADR-0003 addendum) — the converted
+# weights are committed and redistributed; see models/LICENSES.md.
+!models/embedder-foamliu.safetensors
 models/*.onnx
 tools/fixtures/*.npz
 tools/.cache/
-# Public model assets: only the redistributable base is committed (ADR-0003) —
-# the detector (MIT lineage) + both arch manifests (repo-generated metadata).
-# The landmark + embedder safetensors have no upstream LICENSE, so they are
-# never committed or deployed; the Pages demo collects them via a drop-zone.
+# Public model assets: only the redistributable base is committed (ADR-0003
+# + addendum) — the detector (MIT lineage), the foamliu embedder (Apache-2.0,
+# see models/LICENSES.md) and the arch manifests (repo-generated metadata).
+# The landmark safetensors (and the Xiaoccer embedder) have no upstream
+# LICENSE, so they are never committed or deployed; the Pages demo collects
+# the one remaining file (landmark) via a drop-zone.
 web/public/models/*
 !web/public/models/detector-slim320.safetensors
+!web/public/models/embedder-foamliu.safetensors
+!web/public/models/embedder-foamliu.manifest.json
 !web/public/models/landmark-mfn68.manifest.json
-!web/public/models/embedder-mfn.manifest.json
 web/src/wasm/

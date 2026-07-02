@@ -70,6 +70,20 @@ FILES: dict[str, tuple[str, str, str]] = {
         f"{_XIAOCCER_RAW}/core/model.py",
         "22749d05ab72b987964d539e16ad806688f818e64bca87df0626f721742661b5",
     ),
+    # -- Apache-2.0 embedder (foamliu/MobileFaceNet, redistributable) ---------
+    # Release asset is the raw state dict of MobileFaceNet() (export.py saves
+    # model.state_dict()); the scripted twin (mobilefacenet_scripted.pt) is
+    # deliberately not used — the raw dict converts cleanly key-for-key.
+    "foamliu_embedder.pt": (
+        "foamliu_mobilefacenet.pt",
+        "https://github.com/foamliu/MobileFaceNet/releases/download/v1.0/mobilefacenet.pt",
+        "90a00ba1d8b0b688af3deb731ed53dca582e6106805d1bc3cfdef55f570493f4",
+    ),
+    "foamliu_mobilefacenet.py": (
+        "foamliu_mobilefacenet.py",
+        "https://raw.githubusercontent.com/foamliu/MobileFaceNet/master/mobilefacenet.py",
+        "0cb9915f9ae43d5114b47afc45796d3a1c3119f176f3159e078192154379a8fb",
+    ),
     # -- upstream SDK reference sources (imported verbatim by gen_fixtures) ---
     "sdk/mb_tiny.py": (
         "sdk/face_detect/vision/nn/mb_tiny.py",
@@ -193,6 +207,22 @@ def load_py_module(path: Path, name: str):
     return mod
 
 
+def load_foamliu_mfn(path: Path):
+    """Import foamliu/MobileFaceNet ``mobilefacenet.py`` (Apache-2.0).
+
+    The module does ``from custom_config import device, num_classes, emb_size``
+    at import time — training-only globals consumed by ``ArcMarginModel``,
+    which we never instantiate — so an inert stub module satisfies the import.
+    """
+    if "custom_config" not in sys.modules:
+        stub = types.ModuleType("custom_config")
+        stub.device = "cpu"
+        stub.num_classes = 1
+        stub.emb_size = 128
+        sys.modules["custom_config"] = stub
+    return load_py_module(path, "rvface_foamliu_mfn")
+
+
 def install_import_stubs() -> None:
     """Make the upstream sources importable without cv2/torchvision.
 
@@ -278,6 +308,8 @@ def pseudo_image(seed: int, shape: tuple[int, ...], domain: str) -> "torch.Tenso
     - ``"unit"``:   x / 255              (cunjian landmark preprocessing)
     - ``"unit256"``: x / 256             (upstream embedder quirk, ADR-0004)
     - ``"pm1"``:    (x - 127.5) / 128    (Xiaoccer LFW eval preprocessing)
+    - ``"imagenet"``: (x/255 - mean_c) / std_c, torchvision ImageNet stats
+      (foamliu embedder preprocessing; NCHW 3-channel shapes only)
     """
     g = torch.Generator().manual_seed(seed)
     raw = torch.randint(0, 256, shape, generator=g).to(torch.float32)
@@ -289,6 +321,11 @@ def pseudo_image(seed: int, shape: tuple[int, ...], domain: str) -> "torch.Tenso
         return raw / 256.0
     if domain == "pm1":
         return (raw - 127.5) / 128.0
+    if domain == "imagenet":
+        assert len(shape) == 4 and shape[1] == 3, "imagenet domain expects NCHW RGB"
+        mean = torch.tensor([0.485, 0.456, 0.406]).view(1, 3, 1, 1)
+        std = torch.tensor([0.229, 0.224, 0.225]).view(1, 3, 1, 1)
+        return (raw / 255.0 - mean) / std
     raise ValueError(f"unknown domain {domain!r}")
 
 

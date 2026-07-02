@@ -13,7 +13,9 @@ use std::path::{Path, PathBuf};
 use burn::backend::NdArray;
 use burn::tensor::{Tensor, TensorData};
 use rvface_models::detector::SsdSlim320;
-use rvface_models::embedder::{Irn50, MfnBottleneckConfig, MobileFaceNetEmbedder};
+use rvface_models::embedder::{
+    Irn50, MfnBottleneckConfig, MfnV2Config, MobileFaceNetEmbedder, MobileFaceNetV2Embedder,
+};
 use rvface_models::landmark::{MfnDwConfig, MobileFaceNetDw};
 use rvface_models::weights::{Arch, MfnArch, ModelManifest, Weights};
 
@@ -305,6 +307,20 @@ fn parity_embedder_mfn_real() {
 }
 
 #[test]
+fn parity_embedder_foamliu_real() {
+    let Some(fixture) = load_fixture("embedder-foamliu-real") else {
+        return;
+    };
+    let arch = match model_manifest("embedder-foamliu").arch {
+        Arch::MobileFaceNet(MfnArch::InvertedResidualV2(arch)) => arch,
+        other => panic!("unexpected arch: {other:?}"),
+    };
+    let net = MobileFaceNetV2Embedder::new(fixture.weights(), MfnV2Config::from_arch(&arch));
+    let embedding = net.forward(fixture.input()).expect("embedder forward");
+    fixture.check("embedding", &tensor2_to_vec(embedding));
+}
+
+#[test]
 fn parity_irn50_rand() {
     let Some(fixture) = load_fixture("irn50-rand") else {
         return;
@@ -339,6 +355,7 @@ fn index_fixtures_all_covered() {
         "landmark-cunjian",
         "irn50-rand",
         "embedder-mfn-real",
+        "embedder-foamliu-real",
     ];
     for entry in &index.fixtures {
         assert!(

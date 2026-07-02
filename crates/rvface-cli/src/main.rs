@@ -11,7 +11,7 @@ use burn::tensor::backend::Backend;
 use clap::{Parser, Subcommand, ValueEnum};
 use rvface_core::similarity::{is_match, similarity};
 use rvface_core::{Detection, Image, Pose};
-use rvface_models::embedder::MfnBottleneckConfig;
+use rvface_models::embedder::{MfnBottleneckConfig, MfnV2Config};
 use rvface_models::landmark::MfnDwConfig;
 use rvface_models::weights::{Arch, MfnArch, ModelManifest};
 use rvface_models::{Embedder, Face, FacePipeline};
@@ -27,7 +27,7 @@ struct Cli {
     command: Command,
 
     /// Directory holding the converted weights + manifests
-    /// (detector-slim320 / landmark-mfn68 / embedder-mfn)
+    /// (detector-slim320 / landmark-mfn68 / embedder-foamliu or embedder-mfn)
     #[arg(long, global = true, value_name = "DIR", default_value = "models")]
     models_dir: PathBuf,
 
@@ -193,20 +193,43 @@ where
             Embedder::irn50_from_safetensors(&bytes, &device)?
         }
         None => {
-            let embedder_manifest = manifest(models_dir, "embedder-mfn")?;
-            let config = match &embedder_manifest.arch {
+            // Prefer the redistributable Apache-2.0 foamliu embedder (its
+            // converted weights are committed to the repo); fall back to the
+            // locally-converted Xiaoccer one (no upstream LICENSE, ADR-0003).
+            let name = ["embedder-foamliu", "embedder-mfn"]
+                .into_iter()
+                .find(|n| {
+                    models_dir.join(format!("{n}.safetensors")).exists()
+                        && models_dir.join(format!("{n}.manifest.json")).exists()
+                })
+                .with_context(|| {
+                    format!(
+                        "no embedder weights+manifest in {} (expected embedder-foamliu \
+                         or embedder-mfn; run tools/fetch_and_convert.py)",
+                        models_dir.display()
+                    )
+                })?;
+            let embedder_manifest = manifest(models_dir, name)?;
+            let bytes = read(&format!("{name}.safetensors"))?;
+            match &embedder_manifest.arch {
                 Arch::MobileFaceNet(MfnArch::Bottleneck(arch)) => {
-                    MfnBottleneckConfig::from_arch(arch)
+                    Embedder::mobilefacenet_from_safetensors(
+                        &bytes,
+                        MfnBottleneckConfig::from_arch(arch),
+                        &device,
+                    )?
+                }
+                Arch::MobileFaceNet(MfnArch::InvertedResidualV2(arch)) => {
+                    Embedder::mobilefacenet_v2_from_safetensors(
+                        &bytes,
+                        MfnV2Config::from_arch(arch),
+                        &device,
+                    )?
                 }
                 other => {
-                    anyhow::bail!("embedder-mfn manifest has unexpected arch family: {other:?}")
+                    anyhow::bail!("{name} manifest has unexpected arch family: {other:?}")
                 }
-            };
-            Embedder::mobilefacenet_from_safetensors(
-                &read("embedder-mfn.safetensors")?,
-                config,
-                &device,
-            )?
+            }
         }
     };
 

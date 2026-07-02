@@ -57,24 +57,30 @@ upstream demo verdict on its own test images (score 78.2 → *same person*),
 and the browser runs the identical engine (wasm, 1.42 MB gzipped, CPU with
 SIMD128 or WebGPU with automatic CPU fallback) — no mocks anywhere.
 
-- 61 Rust tests: unit math, six PyTorch parity fixtures, end-to-end on the
+- 66 Rust tests: unit math, seven PyTorch parity fixtures, end-to-end on the
   upstream test images ([validation strategy](docs/adrs/0006-testing-validation-optimization.md))
 - [Benchmarks](docs/BENCHMARKS.md): native analyze 176 ms, browser ~0.5 s
   (CPU; includes the 5× denormal-weight fix)
-- See [ADR-0003](docs/adrs/0003-models-weights-licensing.md) for why the
-  landmark/embedder default weights are openly-*obtainable* substitutes
-  (upstream publishes only the detector's). Note these two checkpoints have
-  **no upstream LICENSE file** ([`models/README.md`](models/README.md)), so —
-  unlike the MIT detector — they are never redistributed here: the tooling
-  fetches them locally and the web demo collects them via a drop-zone. See
-  also how to drop in the exact upstream IRN-50 embedder via `--irn50`.
+- See [ADR-0003](docs/adrs/0003-models-weights-licensing.md) (+ addendum)
+  for the weight licensing story. Two weight files are properly licensed and
+  **ship with the repo + demo**: the detector (MIT lineage) and the default
+  embedder (foamliu/MobileFaceNet, Apache-2.0 — notices in
+  [`models/LICENSES.md`](models/LICENSES.md)), so the web demo runs **live
+  face detection out of the box**. The landmark checkpoint has **no upstream
+  LICENSE file** ([`models/README.md`](models/README.md)) and is never
+  redistributed: the tooling fetches it locally and the web demo collects
+  that one file via a drop-zone to unlock landmarks/pose/compare. See also
+  how to drop in the exact upstream IRN-50 embedder via `--irn50`.
 
 ## License & responsible use
 
-Code is [MIT](LICENSE). **No model weights are redistributed** — the fetch
-tooling downloads third-party checkpoints (SHA-256-pinned) whose licensing is
-documented per-file in [`models/README.md`](models/README.md) and
-[ADR-0003](docs/adrs/0003-models-weights-licensing.md); review them before any
+Code is [MIT](LICENSE). Only properly licensed model weights are
+redistributed — the MIT-lineage detector and the Apache-2.0 foamliu embedder,
+with notices in [`models/LICENSES.md`](models/LICENSES.md). The fetch tooling
+downloads the remaining third-party checkpoints locally (SHA-256-pinned);
+their licensing is documented per-file in
+[`models/README.md`](models/README.md) and
+[ADR-0003](docs/adrs/0003-models-weights-licensing.md) — review it before any
 commercial use.
 
 This is face-recognition software, i.e. biometric processing. It runs entirely

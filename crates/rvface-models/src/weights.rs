@@ -20,6 +20,10 @@ pub enum WeightsError {
     /// A tensor required by a forward pass is absent from the store.
     #[error("missing tensor key: {0}")]
     MissingKey(String),
+    /// A pipeline stage was invoked without its network loaded (a partial,
+    /// detector-only pipeline — see `FacePipeline::detector_only`).
+    #[error("pipeline stage `{0}` unavailable: its weights were not loaded")]
+    MissingStage(&'static str),
     /// A tensor exists but its shape does not match what the caller expects.
     #[error("tensor `{key}`: expected rank {expected_rank}, got shape {actual:?}")]
     ShapeMismatch {
@@ -184,6 +188,10 @@ pub struct InputSpec {
     pub mean: Vec<f32>,
     /// Multiplied after mean subtraction.
     pub scale: f64,
+    /// Optional per-channel std divisor applied after mean/scale
+    /// (torchvision `Normalize`): `out[c] = (pixel - mean[c]) * scale / std[c]`.
+    #[serde(default)]
+    pub std: Option<Vec<f32>>,
     /// Tensor layout (always `nchw`).
     pub layout: String,
     /// Stage-specific cropping/quirks.
@@ -248,6 +256,9 @@ pub enum MfnArch {
     /// paper/Xiaoccer flavor (inverted-bottleneck blocks).
     #[serde(rename = "bottleneck")]
     Bottleneck(MfnBottleneckArch),
+    /// foamliu flavor (MobileNetV2-style inverted residuals, ReLU6).
+    #[serde(rename = "inverted-residual-v2")]
+    InvertedResidualV2(MfnV2Arch),
 }
 
 /// Non-linearity used by a MobileFaceNet variant.
@@ -256,6 +267,8 @@ pub enum MfnArch {
 pub enum Activation {
     /// `nn.ReLU`.
     Relu,
+    /// `nn.ReLU6` (`min(max(x, 0), 6)`).
+    Relu6,
     /// `nn.PReLU` with per-channel slopes.
     Prelu,
 }
@@ -345,6 +358,32 @@ pub struct MfnBottleneckArch {
     pub gdc_kernel: [usize; 2],
     /// Whether the GDC linear stage has a bias.
     pub gdc_linear_bias: bool,
+    /// Embedding width.
+    pub embedding_size: usize,
+    /// Network output dimension.
+    pub output_dim: usize,
+}
+
+/// Inverted-residual (MobileNetV2-style) MobileFaceNet hyperparameters
+/// (foamliu flavor: ReLU6 blocks — plain ReLU in the depthwise-separable
+/// stem — GDConv head with a biased 1x1 embedding conv).
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct MfnV2Arch {
+    /// Input channel count.
+    pub in_channels: usize,
+    /// Input spatial size `[height, width]`.
+    pub input_size: [usize; 2],
+    /// Block non-linearity.
+    pub activation: Activation,
+    /// `[expansion, channels, num_blocks, first_stride]` rows
+    /// (`inverted_residual_setting`; expansion 1 is not supported — the
+    /// shipped setting never uses it and its state-dict layout differs).
+    pub inverted_residual_setting: Vec<[usize; 4]>,
+    /// Column names of `inverted_residual_setting` (documentation only).
+    #[serde(default)]
+    pub inverted_residual_setting_columns: Option<Vec<String>>,
+    /// GDC depthwise kernel `[kh, kw]`.
+    pub gdc_kernel: [usize; 2],
     /// Embedding width.
     pub embedding_size: usize,
     /// Network output dimension.
@@ -455,5 +494,37 @@ mod tests {
         assert_eq!(arch.embedding_size, 128);
         assert_eq!(arch.conv1.stride, 2);
         assert_eq!(arch.conv2.stride, 1);
+    }
+
+    #[test]
+    fn embedder_foamliu_manifest_parses() {
+        let Some(m) = load_manifest("embedder-foamliu") else {
+            eprintln!("skipping: models/embedder-foamliu.manifest.json absent");
+            return;
+        };
+        let Arch::MobileFaceNet(MfnArch::InvertedResidualV2(arch)) = &m.arch else {
+            panic!("wrong family/style: {:?}", m.arch);
+        };
+        assert_eq!(arch.activation, Activation::Relu6);
+        assert_eq!(
+            arch.inverted_residual_setting,
+            vec![
+                [2, 64, 5, 2],
+                [4, 128, 1, 2],
+                [2, 128, 6, 1],
+                [4, 128, 1, 2],
+                [2, 128, 2, 1]
+            ]
+        );
+        assert_eq!(arch.input_size, [112, 112]);
+        assert_eq!(arch.gdc_kernel, [7, 7]);
+        assert_eq!(arch.embedding_size, 128);
+        // Apache-2.0 is what makes this embedder redistributable (ADR-0003
+        // addendum); a manifest regenerated without the license note is a bug.
+        assert!(m.license.contains("Apache"), "license: {}", m.license);
+        // torchvision Normalize folded to pixel domain.
+        assert_eq!(m.input.mean, vec![123.675, 116.28, 103.53]);
+        assert_eq!(m.input.std.as_deref(), Some(&[0.229, 0.224, 0.225][..]));
+        assert_eq!(m.tensors.len(), 307);
     }
 }

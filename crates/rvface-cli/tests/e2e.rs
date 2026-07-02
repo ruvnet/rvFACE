@@ -15,9 +15,9 @@ use rvface_core::align::{
 };
 use rvface_core::similarity::{is_match, similarity};
 use rvface_core::Image;
-use rvface_models::embedder::MfnBottleneckConfig;
+use rvface_models::embedder::{MfnBottleneckConfig, MfnV2Config};
 use rvface_models::landmark::MfnDwConfig;
-use rvface_models::weights::{Arch, MfnArch, ModelManifest};
+use rvface_models::weights::{Arch, MfnArch, ModelManifest, WeightsError};
 use rvface_models::{Embedder, Face, FacePipeline};
 
 type B = NdArray;
@@ -46,30 +46,44 @@ fn manifest(name: &str) -> Option<ModelManifest> {
     Some(serde_json::from_str(&json).expect("manifest parses"))
 }
 
-/// Builds the default (MobileFaceNet-embedder) pipeline from `models/`, or
-/// `None` when any weight/manifest file is absent.
-fn load_pipeline() -> Option<FacePipeline<B>> {
+/// Builds a full pipeline from `models/` with the named embedder
+/// (`embedder-mfn` Xiaoccer bottleneck or `embedder-foamliu`
+/// inverted-residual-v2), or `None` when any weight/manifest file is absent.
+fn load_pipeline_with(embedder_name: &str) -> Option<FacePipeline<B>> {
     let device = Default::default();
     let models = repo_root().join("models");
     let detector = read_optional(&models.join("detector-slim320.safetensors"))?;
     let landmark = read_optional(&models.join("landmark-mfn68.safetensors"))?;
-    let embedder = read_optional(&models.join("embedder-mfn.safetensors"))?;
+    let embedder = read_optional(&models.join(format!("{embedder_name}.safetensors")))?;
 
     let landmark_config = match manifest("landmark-mfn68")?.arch {
         Arch::MobileFaceNet(MfnArch::DepthwiseResidual(arch)) => MfnDwConfig::from_arch(&arch),
         other => panic!("unexpected landmark arch: {other:?}"),
     };
-    let embedder_config = match manifest("embedder-mfn")?.arch {
-        Arch::MobileFaceNet(MfnArch::Bottleneck(arch)) => MfnBottleneckConfig::from_arch(&arch),
+    let embedder = match manifest(embedder_name)?.arch {
+        Arch::MobileFaceNet(MfnArch::Bottleneck(arch)) => Embedder::mobilefacenet_from_safetensors(
+            &embedder,
+            MfnBottleneckConfig::from_arch(&arch),
+            &device,
+        ),
+        Arch::MobileFaceNet(MfnArch::InvertedResidualV2(arch)) => {
+            Embedder::mobilefacenet_v2_from_safetensors(
+                &embedder,
+                MfnV2Config::from_arch(&arch),
+                &device,
+            )
+        }
         other => panic!("unexpected embedder arch: {other:?}"),
-    };
-
-    let embedder = Embedder::mobilefacenet_from_safetensors(&embedder, embedder_config, &device)
-        .expect("embedder weights load");
+    }
+    .expect("embedder weights load");
     Some(
         FacePipeline::from_safetensors(&detector, &landmark, landmark_config, embedder, &device)
             .expect("pipeline weights load"),
     )
+}
+
+fn load_pipeline() -> Option<FacePipeline<B>> {
+    load_pipeline_with("embedder-mfn")
 }
 
 fn load_image(repo_relative: &str) -> Option<Image> {
@@ -194,8 +208,94 @@ fn e2e_pipeline_on_upstream_test_images() {
     );
 }
 
+/// Same flow with the default, redistributable foamliu embedder
+/// (Apache-2.0, `embedder-foamliu.safetensors` — the one the demo ships).
+#[test]
+fn e2e_pipeline_foamliu_embedder() {
+    let Some(pipeline) = load_pipeline_with("embedder-foamliu") else {
+        return;
+    };
+    let (Some(img1), Some(img2)) = (load_image(TEST_IMAGES[0]), load_image(TEST_IMAGES[1])) else {
+        return;
+    };
+
+    let faces1 = pipeline.analyze(&img1, 5).expect("analyze test_1");
+    let faces2 = pipeline.analyze(&img2, 5).expect("analyze test_2");
+    check_faces("test_1.jpg (foamliu)", &faces1);
+    check_faces("test_2.png (foamliu)", &faces2);
+
+    // Measured 75.302 (NdArray f32, 2026-07) on this hard cross-pose pair
+    // (test_2 is at yaw ~-30 deg; foamliu expects InsightFace-aligned crops,
+    // rvFACE feeds its eyes-level 128->112 resize). The verdict matches the
+    // upstream demo's "same person", but only barely — assert the empirical
+    // range rather than a comfortable margin, honestly.
+    let score = similarity(&faces1[0].embedding, &faces2[0].embedding);
+    println!("cross-image similarity (foamliu embedder) = {score:.3}");
+    assert!(
+        is_match(score),
+        "cross-image score {score} <= 75: verdict no longer matches upstream's 'same person'"
+    );
+    assert!(
+        (74.0..78.0).contains(&score),
+        "cross-image score {score} outside the empirical range [74, 78) (measured 75.302)"
+    );
+
+    // Same-person, same-pose control: an image against its own mirror scores
+    // far above threshold (measured 97.382) — the embedding is pose-sensitive
+    // but identity-consistent.
+    let flipped = flip_horizontal(&img1);
+    let faces_flip = pipeline.analyze(&flipped, 5).expect("analyze flipped");
+    let flip_score = similarity(&faces1[0].embedding, &faces_flip[0].embedding);
+    println!("mirror similarity (foamliu embedder) = {flip_score:.3}");
+    assert!(
+        flip_score > 90.0,
+        "mirror-pair score {flip_score} <= 90 (measured 97.382)"
+    );
+}
+
+/// Horizontal mirror of an RGB8 image (test helper).
+fn flip_horizontal(img: &Image) -> Image {
+    let (w, h) = (img.width, img.height);
+    let mut data = vec![0u8; w * h * 3];
+    for y in 0..h {
+        for x in 0..w {
+            for c in 0..3 {
+                data[(y * w + x) * 3 + c] = img.get(w - 1 - x, y, c);
+            }
+        }
+    }
+    Image::new(data, w, h, 3).expect("RGB8 buffer")
+}
+
+/// Detector-only partial mode (the Pages demo out of the box): `detect`
+/// finds the face, `analyze` fails with `MissingStage`.
+#[test]
+fn e2e_detector_only_partial_mode() {
+    let models = repo_root().join("models");
+    let Some(detector) = read_optional(&models.join("detector-slim320.safetensors")) else {
+        return;
+    };
+    let Some(img) = load_image(TEST_IMAGES[0]) else {
+        return;
+    };
+    let pipeline =
+        FacePipeline::<B>::detector_only_from_safetensors(&detector, &Default::default())
+            .expect("detector weights load");
+    assert!(!pipeline.is_full());
+
+    let detections = pipeline.detect(&img, 5).expect("detect");
+    assert!(!detections.is_empty(), "no face detected in partial mode");
+    assert!(detections[0].score > 0.9);
+
+    match pipeline.analyze(&img, 5) {
+        Err(WeightsError::MissingStage(stage)) => assert_eq!(stage, "embedder"),
+        other => panic!("expected MissingStage, got {other:?}"),
+    }
+}
+
 /// Drives the actual `rvface` binary end-to-end (ADR-0006: "CLI `rvface
-/// compare` is the harness").
+/// compare` is the harness"). The CLI prefers the committed Apache-2.0
+/// foamliu embedder; the landmark weights are still local-only.
 #[test]
 fn e2e_cli_compare_verdict() {
     let root = repo_root();
@@ -203,7 +303,7 @@ fn e2e_cli_compare_verdict() {
     for file in [
         "detector-slim320.safetensors",
         "landmark-mfn68.safetensors",
-        "embedder-mfn.safetensors",
+        "embedder-foamliu.safetensors",
     ] {
         if !models.join(file).exists() {
             eprintln!("skipping: models/{file} absent");
