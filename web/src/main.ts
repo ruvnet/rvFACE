@@ -8,7 +8,13 @@
 import './style.css';
 import type { BackendKind, EngineFactory, RvFaceEngine, WeightBundle } from './engine';
 import { loadWasmFactory } from './engine-wasm';
-import { combineWeights, loadWeights, type UserWeights, type WeightBase } from './weights';
+import {
+  combineWeights,
+  loadWeights,
+  partialBundle,
+  type UserWeights,
+  type WeightBase,
+} from './weights';
 import { ComparePane } from './ui/compare';
 import { StatusBar } from './ui/statusbar';
 import { WeightsPanel } from './ui/weights-panel';
@@ -43,10 +49,6 @@ let weights: WeightBundle | null = null;
 let weightsPanel: WeightsPanel | null = null;
 let requestedBackend: BackendKind = hasWebGpu() ? 'webgpu' : 'cpu';
 let initSeq = 0;
-
-/** Thrown by `resolveFactory` when the demo is waiting for the user to
- *  supply the non-redistributable weights — a normal state, not an error. */
-class AwaitingWeightsError extends Error {}
 
 const getEngine = () => engine;
 const comparePane = new ComparePane(document.querySelector('#compare-pane')!, getEngine, status);
@@ -100,7 +102,7 @@ async function resolveFactory(): Promise<{ factory: EngineFactory; weights: Weig
     // genuinely broken deployment, not the expected "user must supply weights".
     showFatalError('model base missing', [
       'python3 tools/fetch_and_convert.py',
-      './web/build-wasm.sh  # copies the detector + manifests into web/public/models/',
+      './web/build-wasm.sh  # copies the detector + embedder + manifests into web/public/models/',
     ]);
     throw err;
   }
@@ -112,24 +114,28 @@ async function resolveFactory(): Promise<{ factory: EngineFactory; weights: Weig
     return { factory, weights };
   }
 
-  // Detector loaded, but the non-redistributable landmark + embedder weights
-  // are absent (the public Pages demo). Collect them from the user, then init.
+  // The shipped base (detector MIT + embedder Apache-2.0) is here, only the
+  // non-redistributable landmark weights are absent (the public Pages demo).
+  // Start a detect-only engine immediately — live detection boxes out of the
+  // box — and collect the one remaining file from the user to go full.
   status.log(
-    `detector loaded; awaiting non-redistributable weights (${result.missing.join(', ')})`,
+    `detector + embedder loaded — live detection ready; drop ${result.missing.join(', ')} ` +
+      'to unlock landmarks, pose and 1:1 compare',
     'warn',
   );
   showWeightsPanel(result.base);
-  throw new AwaitingWeightsError('awaiting user-supplied weights');
+  weights = partialBundle(result.base);
+  return { factory, weights };
 }
 
-/** Render the drop-zone panel for the two non-redistributable weights. */
+/** Render the drop-zone panel for the non-redistributable landmark file. */
 function showWeightsPanel(base: WeightBase): void {
   if (weightsPanel) return;
   weightsPanel = new WeightsPanel(app, status, (user: UserWeights) => {
     weights = combineWeights(base, user);
     weightsPanel?.unmount();
     weightsPanel = null;
-    status.log('weights complete — starting engine…');
+    status.log('weights complete — starting the full engine…');
     void initEngine(requestedBackend);
   });
   weightsPanel.mount();
@@ -151,11 +157,15 @@ async function initEngine(backend: BackendKind): Promise<void> {
     engine?.dispose();
     engine = next;
     status.setEngine(engine.backend, engine.kind);
-    status.log(`engine ready: ${engine.kind} on ${engine.backend}`);
+    status.log(
+      engine.mode === 'detect'
+        ? `engine ready (live detection): ${engine.kind} on ${engine.backend} — ` +
+            'drop the landmark weights for the full pipeline'
+        : `engine ready: ${engine.kind} on ${engine.backend}`,
+    );
     comparePane.update();
     comparePane.notifyEngineReady();
   } catch (err) {
-    if (err instanceof AwaitingWeightsError) return; // panel is up; not an error
     status.log(`engine init failed: ${err instanceof Error ? err.message : err}`, 'error');
   }
 }

@@ -10,9 +10,14 @@ DataParallel ``module.`` prefix stripped — see naming.md):
 - models/landmark-mfn68.safetensors    + .manifest.json
     cunjian/pytorch_face_landmark 68-point MobileFaceNet (112x112 RGB-shaped
     input, fed BGR by the reference code)
+- models/embedder-foamliu.safetensors  + .manifest.json
+    foamliu/MobileFaceNet release asset ``mobilefacenet.pt`` (Apache-2.0,
+    MobileNetV2-style inverted-residual MobileFaceNet, 112x112 RGB, 128-d) —
+    the DEFAULT, redistributable embedder (committed + shipped, ADR-0003)
 - models/embedder-mfn.safetensors      + .manifest.json
     Xiaoccer/MobileFaceNet_Pytorch ``model/best/068.ckpt`` ArcFace-style
-    embedding MobileFaceNet (112x96 RGB, 128-d)
+    embedding MobileFaceNet (112x96 RGB, 128-d) — optional alternative,
+    no upstream LICENSE, never redistributed
 - models/embedder-irn50.safetensors    + .manifest.json   (only with --irn50)
     converted from a user-supplied ``irn50_pytorch.npy`` (upstream never
     published it)
@@ -190,6 +195,57 @@ def convert_embedder(paths: dict) -> None:
     print(f"wrote {out} ({out.stat().st_size} bytes, {len(tensors)} tensors)")
 
 
+def convert_embedder_foamliu(paths: dict) -> None:
+    sd = torch.load(paths["foamliu_embedder.pt"], map_location="cpu", weights_only=True)
+    sd = strip_module_prefix(sd)
+    # validate against the upstream Apache-2.0 architecture before writing
+    fm = common.load_foamliu_mfn(paths["foamliu_mobilefacenet.py"])
+    net = fm.MobileFaceNet()
+    net.load_state_dict(sd, strict=True)
+    out = MODELS_DIR / "embedder-foamliu.safetensors"
+    tensors = save_state_dict_safetensors(sd, out)
+    manifest = _manifest(
+        "embedder-foamliu", "foamliu_embedder.pt",
+        "Apache License 2.0 (foamliu/MobileFaceNet publishes a LICENSE file at the repo "
+        "root; verified via the GitHub licenses API, spdx_id Apache-2.0, 2026-07-02). "
+        "Redistributable: converted weights are committed to this repository and shipped "
+        "with the Pages demo, with attribution and the full license text in "
+        "models/LICENSES.md. Source: release asset v1.0 mobilefacenet.pt (raw state "
+        "dict); trained on MS-Celeb-1M (research dataset).",
+        {
+            "width": 112, "height": 112, "channels": 3, "colorspace": "rgb",
+            "mean": [123.675, 116.28, 103.53], "scale": 1.0 / 255.0,
+            "std": [0.229, 0.224, 0.225],
+            "layout": "nchw",
+            "note": "torchvision ToTensor + Normalize(mean=[0.485,0.456,0.406], "
+                    "std=[0.229,0.224,0.225]), folded to pixel domain: "
+                    "out[c] = ((pixel - mean[c]) * scale) / std[c]. Reference training "
+                    "crops are InsightFace-aligned 112x112; rvFACE bilinear-resizes its "
+                    "aligned 128x128 eyes-level crop to 112x112 (documented adaptation, "
+                    "same spirit as embedder-mfn)",
+        },
+        "embedding [1,128], NOT L2-normalized (normalize downstream before the "
+        "upstream similarity formula score=(dot+1)*50)",
+        {
+            "family": "mobilefacenet",
+            "style": "inverted-residual-v2",
+            "in_channels": 3,
+            "input_size": [112, 112],
+            "activation": "relu6",
+            "inverted_residual_setting": [[2, 64, 5, 2], [4, 128, 1, 2], [2, 128, 6, 1],
+                                           [4, 128, 1, 2], [2, 128, 2, 1]],
+            "inverted_residual_setting_columns": ["expansion", "channels", "num_blocks",
+                                                   "first_stride"],
+            "gdc_kernel": [7, 7],
+            "embedding_size": 128,
+            "output_dim": 128,
+        },
+        tensors,
+    )
+    write_json(MODELS_DIR / "embedder-foamliu.manifest.json", manifest)
+    print(f"wrote {out} ({out.stat().st_size} bytes, {len(tensors)} tensors)")
+
+
 def convert_irn50(npy_path: Path, paths: dict) -> None:
     """Convert a user-supplied irn50_pytorch.npy via the upstream loader itself.
 
@@ -250,6 +306,7 @@ def main() -> None:
     MODELS_DIR.mkdir(parents=True, exist_ok=True)
     paths = ensure("detector.pth", "landmark.pth.tar", "embedder.ckpt",
                    "cunjian_mobilefacenet.py", "xiaoccer_model.py",
+                   "foamliu_embedder.pt", "foamliu_mobilefacenet.py",
                    "test_1.jpg", "test_2.png")
     if args.irn50:
         # irn50 conversion additionally needs the upstream module source
@@ -258,6 +315,7 @@ def main() -> None:
     convert_detector(paths)
     convert_landmark(paths)
     convert_embedder(paths)
+    convert_embedder_foamliu(paths)
     if args.irn50:
         if not args.irn50.exists():
             sys.exit(f"ERROR: --irn50 file not found: {args.irn50}")

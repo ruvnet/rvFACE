@@ -39,6 +39,12 @@
       "manifest": "embedder-mfn-real.json",
       "data": "embedder-mfn-real.npz",
       "weights": "real:models/embedder-mfn.safetensors"
+    },
+    {
+      "name": "embedder-foamliu-real",
+      "manifest": "embedder-foamliu-real.json",
+      "data": "embedder-foamliu-real.npz",
+      "weights": "real:models/embedder-foamliu.safetensors"
     }
   ]
 }

@@ -18,7 +18,7 @@ use burn::tensor::activation::relu;
 use burn::tensor::backend::Backend;
 use burn::tensor::Tensor;
 
-use crate::ops::{batch_norm1d, batch_norm2d, conv2d, linear_pt, prelu, TORCH_BN_EPS};
+use crate::ops::{batch_norm1d, batch_norm2d, conv2d, linear_pt, prelu, relu6, TORCH_BN_EPS};
 use crate::weights::{Activation, MfnDwArch, Weights, WeightsError};
 
 /// Variant parameters of the depthwise-residual MobileFaceNet.
@@ -85,6 +85,9 @@ impl<B: Backend> MobileFaceNetDw<B> {
     fn activate(&self, x: Tensor<B, 4>, prefix: &str) -> Result<Tensor<B, 4>, WeightsError> {
         match self.config.activation {
             Activation::Relu => Ok(relu(x)),
+            // No depthwise-residual checkpoint uses ReLU6; the shared
+            // Activation enum carries it for the foamliu embedder flavor.
+            Activation::Relu6 => Ok(relu6(x)),
             Activation::Prelu => prelu(x, &self.weights, &format!("{prefix}.prelu.weight")),
         }
     }

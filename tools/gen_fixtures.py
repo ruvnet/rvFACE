@@ -16,6 +16,8 @@ Fixtures (tools/fixtures/):
   D landmark-cunjian  cunjian 112x112 MobileFaceNet-136, real checkpoint
   E irn50-rand        upstream IRN-50 embedder, seeded random weights (9012)
   F embedder-mfn-real Xiaoccer 112x96 MobileFaceNet-128, real checkpoint
+  G embedder-foamliu-real  foamliu 112x112 inverted-residual MobileFaceNet-128,
+                           real Apache-2.0 release weights
 
 Arrays are float32 .npz; synthetic weights are .safetensors with the original
 state_dict keys; each fixture has a small JSON manifest and fixtures/INDEX.json
@@ -332,6 +334,34 @@ def make_embedder_fixture(paths) -> dict:
     )
 
 
+def make_embedder_foamliu_fixture(paths) -> dict:
+    fm = common.load_foamliu_mfn(paths["foamliu_mobilefacenet.py"])
+    net = fm.MobileFaceNet()
+    sd = strip_module_prefix(
+        torch.load(paths["foamliu_embedder.pt"], map_location="cpu", weights_only=True)
+    )
+    net.load_state_dict(sd, strict=True)
+    net.eval()
+    x = pseudo_image(2026, (1, 3, 112, 112), "imagenet")
+    with torch.no_grad():
+        out = net(x)
+    return _save_fixture(
+        "embedder-foamliu-real",
+        {"input": x, "embedding": out},
+        {
+            "net": "foamliu/MobileFaceNet mobilefacenet.py MobileFaceNet(): "
+                   "MobileNetV2-style inverted residuals, ReLU6 (plain ReLU in the "
+                   "dw_conv stem), GDConv 7x7, biased 1x1 head conv + BN, 128-d",
+            "weights": "real:models/embedder-foamliu.safetensors",
+            "seed": None,
+            "input_seed": 2026,
+            "input_domain": "(randint(0,256)/255 - imagenet_mean) / imagenet_std",
+            "notes": "input is HxW = 112x112; output is the raw (not L2-normalized) "
+                     "128-d embedding",
+        },
+    )
+
+
 # --------------------------------------------------------------------------- main
 
 
@@ -340,6 +370,7 @@ def main() -> None:
     paths = ensure(
         "detector.pth", "landmark.pth.tar", "embedder.ckpt",
         "cunjian_mobilefacenet.py", "xiaoccer_model.py",
+        "foamliu_embedder.pt", "foamliu_mobilefacenet.py",
         "sdk/mb_tiny.py", "sdk/ssd.py", "sdk/mb_tiny_fd.py", "sdk/predictor.py",
         "sdk/data_preprocessing.py", "sdk/transforms.py", "sdk/fd_config.py",
         "sdk/box_utils.py", "sdk/misc.py", "sdk/MobileFaceNet.py",
@@ -357,6 +388,7 @@ def main() -> None:
     (FIXTURES_DIR / "landmark-cunjian.notes.md").write_text(CUNJIAN_NOTES)
     entries.append(make_irn50_fixture())
     entries.append(make_embedder_fixture(paths))
+    entries.append(make_embedder_foamliu_fixture(paths))
 
     write_json(FIXTURES_DIR / "INDEX.json", {
         "tolerance_base": TOLERANCE,

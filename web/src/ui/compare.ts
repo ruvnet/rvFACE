@@ -60,6 +60,7 @@ class CompareSlot {
   private readonly dropZone: DropZoneHandle;
   private image: LoadedImage | null = null;
   private pendingAutoStart = false;
+  private previewOnlyNoted = false;
   private lastFrameTime = 0;
   private fpsEma = 0;
 
@@ -128,11 +129,15 @@ class CompareSlot {
     }
   }
 
-  /** Auto-start a webcam-default slot the first time the engine is ready. */
+  /** Engine initialized (or swapped, e.g. detect-only → full): auto-start a
+   *  webcam-default slot the first time, and re-analyze any held still so its
+   *  face gains the new engine's landmarks/embeddings. */
   notifyEngineReady(): void {
     if (this.pendingAutoStart && !this.webcam.active) {
       this.pendingAutoStart = false;
       void this.startWebcam();
+    } else if (this.image && !this.webcam.active) {
+      void this.reanalyze();
     }
   }
 
@@ -167,15 +172,20 @@ class CompareSlot {
     this.showImage();
   }
 
-  /** Grab the current webcam frame (no overlay) and analyze it, for freezing. */
+  /** Grab the current webcam frame (no overlay) and analyze it, for freezing.
+   *  Works with a null engine too — the frame freezes with no face attached
+   *  (preview-only mode; analysis picks up after the engine initializes). */
   private async captureFrozenFrame(): Promise<LoadedImage | null> {
-    const engine = this.getEngine();
-    if (!engine || this.video.videoWidth === 0) return null;
+    if (this.video.videoWidth === 0) return null;
     let bitmap: ImageBitmap;
     try {
       bitmap = await createImageBitmap(this.video); // clean pixels, no drawn boxes
     } catch {
       return null;
+    }
+    const engine = this.getEngine();
+    if (!engine) {
+      return { bitmap, face: null, latencyMs: 0, width: bitmap.width, height: bitmap.height, origin: 'webcam' };
     }
     const frame = this.grabber.grab(bitmap, bitmap.width, bitmap.height);
     const t0 = performance.now();
@@ -191,11 +201,6 @@ class CompareSlot {
   }
 
   private async load(file: File): Promise<void> {
-    const engine = this.getEngine();
-    if (!engine) {
-      this.status.log('engine not ready yet', 'warn');
-      return;
-    }
     // Uploading always switches this slot to an image.
     if (this.webcam.active) this.stopWebcam();
     this.setSourceUI('image');
@@ -208,22 +213,45 @@ class CompareSlot {
       return;
     }
 
-    const frame = this.grabber.grab(bitmap, bitmap.width, bitmap.height);
-    const t0 = performance.now();
-    const faces = await engine.analyze(frame.rgba, frame.width, frame.height, 1);
-    const latencyMs = performance.now() - t0;
+    // The image always renders; detection runs only once the engine exists
+    // (it is re-run via reanalyze() when the engine initializes/changes).
+    const engine = this.getEngine();
+    let face: FaceResult | null = null;
+    let latencyMs = 0;
+    if (engine) {
+      const frame = this.grabber.grab(bitmap, bitmap.width, bitmap.height);
+      const t0 = performance.now();
+      const faces = await engine.analyze(frame.rgba, frame.width, frame.height, 1);
+      latencyMs = performance.now() - t0;
+      face = faces[0] ?? null;
+    }
 
     this.image?.bitmap.close();
     this.image = {
-      bitmap, face: faces[0] ?? null, latencyMs, width: frame.width, height: frame.height, origin: 'upload',
+      bitmap, face, latencyMs, width: bitmap.width, height: bitmap.height, origin: 'upload',
     };
     this.showImage();
 
-    if (this.state.face) {
+    if (!engine) {
+      this.status.log(`compare image ${this.label}: shown (engine not ready — detection pending)`, 'warn');
+    } else if (this.state.face) {
       this.status.log(`compare image ${this.label}: face ready (${latencyMs.toFixed(1)} ms)`);
     } else {
       this.status.log(`compare image ${this.label}: no face found`, 'warn');
     }
+  }
+
+  /** Re-analyze this slot's still image (e.g. once the engine initializes or
+   *  is swapped — detect-only → full — so faces gain landmarks/embeddings). */
+  async reanalyze(): Promise<void> {
+    const engine = this.getEngine();
+    if (!engine || !this.image || this.webcam.active) return;
+    const frame = this.grabber.grab(this.image.bitmap, this.image.width, this.image.height);
+    const t0 = performance.now();
+    const faces = await engine.analyze(frame.rgba, frame.width, frame.height, 1);
+    this.image.latencyMs = performance.now() - t0;
+    this.image.face = faces[0] ?? null;
+    this.showImage();
   }
 
   /** Render the stored image (or the empty hint) and publish its face. */
@@ -250,12 +278,9 @@ class CompareSlot {
   }
 
   private async startWebcam(): Promise<void> {
-    if (!this.getEngine()) {
-      this.status.log('engine not ready yet', 'warn');
-      this.setSourceUI('image');
-      this.showImage();
-      return;
-    }
+    // No engine gate: the camera preview always renders (see onCamFrame) even
+    // while the engine is still initializing — detection overlays begin
+    // automatically once getEngine() returns non-null (re-evaluated per frame).
     this.zone.setAttribute('aria-disabled', 'true');
     this.hint.hidden = true;
     try {
@@ -283,7 +308,26 @@ class CompareSlot {
   /** One webcam iteration: grab -> analyze the primary face -> redraw -> rescore. */
   private async onCamFrame(video: HTMLVideoElement): Promise<void> {
     const engine = this.getEngine();
-    if (!engine) return;
+    if (!engine) {
+      // Engine not ready (still initializing, or init failed): render the raw
+      // camera preview so the user sees a live picture instead of a blank
+      // pane. Detection overlays start automatically once the engine arrives
+      // — getEngine() is re-evaluated every frame. (Ported from analyze.ts,
+      // commit 27f6c2e.)
+      this.showFrame(video.videoWidth, video.videoHeight);
+      this.ctx.drawImage(video, 0, 0, video.videoWidth, video.videoHeight);
+      this.state.face = null;
+      this.state.latencyMs = 0;
+      this.renderInfo('webcam');
+      if (!this.previewOnlyNoted) {
+        this.previewOnlyNoted = true;
+        this.status.log(
+          `compare webcam ${this.label}: preview only — engine not ready yet (detection starts automatically)`,
+          'warn',
+        );
+      }
+      return;
+    }
 
     const frame = this.grabber.grab(video, video.videoWidth, video.videoHeight);
     const t0 = performance.now();
@@ -332,10 +376,16 @@ class CompareSlot {
     let text: string;
     if (face) {
       const [x1, y1, x2, y2] = face.box;
-      const expr = estimateExpression(face.landmarks);
+      // Detect-only faces carry no landmarks — no expression estimate.
+      const expr =
+        face.landmarks.length > 0
+          ? estimateExpression(face.landmarks).label
+          : `face ${face.score.toFixed(2)} (expression needs the landmark weights)`;
       text =
-        `${source}: ${expr.label} · box [${x1.toFixed(0)}, ${y1.toFixed(0)}, ${x2.toFixed(0)}, ${y2.toFixed(0)}] · ` +
+        `${source}: ${expr} · box [${x1.toFixed(0)}, ${y1.toFixed(0)}, ${x2.toFixed(0)}, ${y2.toFixed(0)}] · ` +
         `${this.state.latencyMs.toFixed(1)} ms`;
+    } else if (kind === 'webcam' && !this.getEngine()) {
+      text = 'webcam: preview only — engine initializing…';
     } else if (kind === 'webcam') {
       text = `webcam: no face in view · ${this.state.latencyMs.toFixed(1)} ms`;
     } else if (kind === 'frozen') {
@@ -414,7 +464,24 @@ export class ComparePane {
       this.gaugeArc.setAttribute('stroke-dasharray', '0 100');
       this.gaugeArc.classList.remove('gauge-same', 'gauge-diff');
       this.gaugeScore.textContent = '—';
-      const msg = a || b ? 'awaiting second face' : 'awaiting both faces';
+      const msg =
+        engine?.mode === 'detect'
+          ? 'compare needs the landmark weights (drop-zone above)'
+          : a || b
+            ? 'awaiting second face'
+            : 'awaiting both faces';
+      this.verdict.textContent = msg;
+      this.verdict.className = 'verdict';
+      this.srStatus.textContent = `${msg}.`;
+      return;
+    }
+    // Detect-only faces carry no embeddings — comparison is impossible
+    // until the landmark weights arrive and the full engine restarts.
+    if (a.embedding.length === 0 || b.embedding.length === 0) {
+      this.gaugeArc.setAttribute('stroke-dasharray', '0 100');
+      this.gaugeArc.classList.remove('gauge-same', 'gauge-diff');
+      this.gaugeScore.textContent = '—';
+      const msg = 'compare needs the landmark weights (drop-zone above)';
       this.verdict.textContent = msg;
       this.verdict.className = 'verdict';
       this.srStatus.textContent = `${msg}.`;

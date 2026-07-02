@@ -1,9 +1,11 @@
 name: Deploy web demo to GitHub Pages
 
 # Builds the wasm engine + Vite web UI and publishes web/dist to Pages.
-# Ships only the redistributable detector (MIT) + arch manifests; the
-# landmark/embedder weights have no upstream LICENSE (ADR-0003) and are never
-# deployed — the UI collects them from the user via a drop-zone at runtime.
+# Ships the redistributable base: detector (MIT), foamliu embedder
+# (Apache-2.0, models/LICENSES.md) + arch manifests — live detection works
+# out of the box. The landmark weights (and the Xiaoccer embedder) have no
+# upstream LICENSE (ADR-0003 + addendum) and are never deployed — the UI
+# collects the landmark file from the user via a drop-zone at runtime.
 
 on:
   push:
@@ -76,9 +78,10 @@ jobs:
         run: cargo install wasm-bindgen-cli --version ${{ steps.wb.outputs.version }} --locked
 
       # Builds wasm (cpu+webgpu), enforces the 3.5 MiB gzip budget, and syncs
-      # the committed detector + manifests into web/public/models/. The two
-      # non-redistributable weights are absent here, which build-wasm.sh warns
-      # about (not fatal) — the deployed demo is detector + drop-zone.
+      # the committed detector + embedder + manifests into web/public/models/.
+      # The non-redistributable landmark weights are absent here, which
+      # build-wasm.sh warns about (not fatal) — the deployed demo runs live
+      # detection out of the box + a drop-zone for the landmark file.
       - name: Build wasm engine
         run: ./web/build-wasm.sh
 
@@ -88,14 +91,23 @@ jobs:
           npm ci
           npm run build
 
-      # Guard: fail the deploy if a non-redistributable weight ever reaches dist.
-      - name: Assert no non-redistributable weights in dist
+      # Guard: fail the deploy if a non-redistributable weight ever reaches
+      # dist (the cunjian landmark and the Xiaoccer embedder — no upstream
+      # LICENSE), and require the redistributable base that makes the demo
+      # work out of the box (detector MIT + embedder-foamliu Apache-2.0).
+      - name: Assert dist ships exactly the redistributable weights
         run: |
           if find web/dist \( -name 'landmark-mfn68.safetensors' -o -name 'embedder-mfn.safetensors' \) -print | grep .; then
             echo "::error::non-redistributable weights found in web/dist — refusing to deploy"
             exit 1
           fi
-          echo "dist clean — only the redistributable detector + manifests ship"
+          for f in detector-slim320.safetensors embedder-foamliu.safetensors; do
+            if ! find web/dist -name "$f" -print | grep -q .; then
+              echo "::error::redistributable weight $f missing from web/dist — the demo would not work out of the box"
+              exit 1
+            fi
+          done
+          echo "dist clean — detector (MIT) + embedder-foamliu (Apache-2.0) + manifests ship; landmark stays drop-zone"
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3

@@ -32,6 +32,7 @@ the Rust side builds models from these manifests.
 | `models/detector-slim320.safetensors` | Faceplugin SDK `version-slim-320.pth` (Ultra-Light-Fast slim-320, MIT lineage) |
 | `models/landmark-mfn68.safetensors` | cunjian/pytorch_face_landmark 68-pt MobileFaceNet checkpoint (112×112) |
 | `models/embedder-mfn.safetensors` | Xiaoccer/MobileFaceNet_Pytorch `model/best/068.ckpt` (112×96 RGB, 128-d) |
+| `models/embedder-foamliu.safetensors` | foamliu/MobileFaceNet release `v1.0/mobilefacenet.pt` (112×112 RGB, 128-d; Apache-2.0 — the committed default embedder) |
 | `models/embedder-irn50.safetensors` | only with `--irn50`: user-supplied upstream `irn50_pytorch.npy` |
 
 ## `gen_fixtures.py`
@@ -53,6 +54,7 @@ reproduces byte-identical files.
 | `landmark-cunjian` | cunjian 112×112 MobileFaceNet-136, real checkpoint (+ `landmark-cunjian.notes.md` documenting the reference preprocessing) |
 | `irn50-rand` | upstream IRN-50 embedder, seeded random weights (9012) |
 | `embedder-mfn-real` | Xiaoccer 112×96 MobileFaceNet-128, real checkpoint |
+| `embedder-foamliu-real` | foamliu 112×112 inverted-residual MobileFaceNet-128, real Apache-2.0 release weights |
 
 Arrays are float32 `.npz` (input + outputs), synthetic weights are
 `.safetensors`, each fixture has a JSON manifest, and `fixtures/INDEX.json`

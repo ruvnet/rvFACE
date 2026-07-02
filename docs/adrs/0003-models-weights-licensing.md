@@ -1,6 +1,6 @@
 # ADR-0003: Model weights sourcing, conversion, and licensing
 
-- Status: Accepted
+- Status: Accepted (amended 2026-07-02 — see Addendum)
 - Date: 2026-07-02
 
 ## Context
@@ -58,3 +58,36 @@ MobileFaceNet checkpoint (112×112 RGB input variant).
   in the upstream scale and a user-supplied IRN-50 drops in cleanly.
 - No third-party weights enter this repository; licensing notes ship in
   `models/README.md` alongside download provenance and SHA-256 pins.
+
+## Addendum (2026-07-02): the foamliu "revisit" clause fired
+
+`models/README.md` recorded that an Apache-2.0 embedder alternative
+(foamliu/MobileFaceNet) existed but its GitHub release assets were not
+reachable from the environment that pinned the original sources — "revisit
+if that changes". It changed:
+
+- **foamliu/MobileFaceNet is Apache-2.0** (LICENSE file at the repo root;
+  verified via the GitHub licenses API, `spdx_id: Apache-2.0`) and its
+  v1.0 release assets are reachable. The raw state dict
+  (`mobilefacenet.pt`, 4 MB) is fetched SHA-256-pinned and converted to
+  `models/embedder-foamliu.safetensors`.
+- Consequence: **the "no third-party weights enter this repository" rule is
+  relaxed for properly licensed weights.** The converted foamliu embedder
+  is committed (in `models/` and `web/public/models/`) and ships with the
+  public Pages demo, with attribution + the full Apache-2.0 text in
+  `models/LICENSES.md` and the license note in its manifest. It replaces
+  the Xiaoccer checkpoint as the **default** embedder (CLI prefers it; the
+  web demo fetches only it); the Xiaoccer path remains as a local-only
+  alternative.
+- The architecture is the same inverted-bottleneck MobileFaceNet family but
+  not manifest-expressible on the Xiaoccer port (ReLU6 vs PReLU, MobileNetV2
+  state-dict layout, 112×112 input, ImageNet per-channel normalization,
+  biased head conv), so it landed as a second manifest-driven variant
+  (`style: "inverted-residual-v2"`, `MobileFaceNetV2Embedder`), validated by
+  a real-weights golden fixture (`embedder-foamliu-real`).
+- The cunjian landmark repository was re-checked the same day and still
+  publishes **no LICENSE** (GitHub licenses API: 404), so the landmark
+  weights stay never-committed/never-deployed. With detector + embedder now
+  shipped, the web demo runs **live detection out of the box**
+  (detector-only partial mode, ADR-0005) and the drop-zone collects exactly
+  one file — the landmark net — to unlock landmarks/pose/alignment/compare.

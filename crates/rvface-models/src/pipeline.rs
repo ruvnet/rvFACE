@@ -31,7 +31,9 @@ use rvface_core::similarity::l2_normalize;
 use rvface_core::{Detection, Pose};
 
 use crate::detector::SsdSlim320;
-use crate::embedder::{Irn50, MfnBottleneckConfig, MobileFaceNetEmbedder};
+use crate::embedder::{
+    Irn50, MfnBottleneckConfig, MfnV2Config, MobileFaceNetEmbedder, MobileFaceNetV2Embedder,
+};
 use crate::landmark::{MfnDwConfig, MobileFaceNetDw};
 use crate::weights::{Weights, WeightsError};
 
@@ -45,6 +47,17 @@ const MFN_INPUT: [usize; 2] = [96, 112];
 const MFN_MEAN: [f32; 3] = [127.5, 127.5, 127.5];
 /// MobileFaceNet embedder normalization scale.
 const MFN_SCALE: f32 = 1.0 / 128.0;
+/// foamliu MobileFaceNet embedder input side (112x112 RGB).
+const MFN_V2_INPUT: usize = 112;
+/// foamliu normalization: torchvision `ToTensor` + ImageNet `Normalize`,
+/// folded to the pixel domain — mean `255 * {0.485, 0.456, 0.406}` …
+const MFN_V2_MEAN: [f32; 3] = [123.675, 116.28, 103.53];
+/// … and per-channel scale `1 / (255 * {0.229, 0.224, 0.225})`.
+const MFN_V2_SCALE: [f32; 3] = [
+    1.0 / (255.0 * 0.229),
+    1.0 / (255.0 * 0.224),
+    1.0 / (255.0 * 0.225),
+];
 
 /// One fully analyzed face.
 #[derive(Debug, Clone, serde::Serialize)]
@@ -77,15 +90,22 @@ fn serialize_landmarks<S: serde::Serializer>(
 ///   (upstream divides by 256, not 255), no mean subtraction. Use it when
 ///   converted `irn50_pytorch.npy` weights are available.
 /// - [`Embedder::MobileFaceNet`] is a documented **adaptation**: the upstream
-///   IRN-50 weights are unpublished, so the default embedder is the Xiaoccer
+///   IRN-50 weights are unpublished, so a substitute embedder is the Xiaoccer
 ///   MobileFaceNet (112x96 RGB input, `(x - 127.5) / 128`). Its reference
 ///   pipeline crops SphereFace-style 112x96 MTCNN alignments; rvFACE instead
 ///   bilinear-resizes the pipeline's aligned 128x128 crop to 96x112. Scores
 ///   are therefore *not* bit-comparable with the upstream demo — the IRN-50
 ///   variant is the parity path.
+/// - [`Embedder::MobileFaceNetV2`] is the **default** (and the only
+///   redistributable) embedder: foamliu's Apache-2.0 inverted-residual
+///   MobileFaceNet (112x112 RGB, torchvision ImageNet normalization). Like
+///   the Xiaoccer variant it is an adaptation — its reference crops are
+///   InsightFace-aligned 112x112, rvFACE resizes the aligned 128x128 crop.
 pub enum Embedder<B: Backend> {
-    /// Xiaoccer MobileFaceNet, 128-d (default; adaptation, see enum docs).
+    /// Xiaoccer MobileFaceNet, 128-d (adaptation, see enum docs).
     MobileFaceNet(MobileFaceNetEmbedder<B>),
+    /// foamliu inverted-residual MobileFaceNet, 128-d (default; Apache-2.0).
+    MobileFaceNetV2(MobileFaceNetV2Embedder<B>),
     /// Upstream IRN-50, 256-d (exact upstream architecture and preprocessing).
     Irn50(Irn50<B>),
 }
@@ -99,6 +119,19 @@ impl<B: Backend> Embedder<B> {
     ) -> Result<Self, WeightsError> {
         let weights = Weights::from_safetensors(bytes, device)?;
         Ok(Self::MobileFaceNet(MobileFaceNetEmbedder::new(
+            weights, config,
+        )))
+    }
+
+    /// Loads the foamliu inverted-residual MobileFaceNet embedder from a
+    /// safetensors buffer.
+    pub fn mobilefacenet_v2_from_safetensors(
+        bytes: &[u8],
+        config: MfnV2Config,
+        device: &B::Device,
+    ) -> Result<Self, WeightsError> {
+        let weights = Weights::from_safetensors(bytes, device)?;
+        Ok(Self::MobileFaceNetV2(MobileFaceNetV2Embedder::new(
             weights, config,
         )))
     }
@@ -143,8 +176,17 @@ impl<B: Backend> Embedder<B> {
             Self::MobileFaceNet(net) => {
                 let [w, h] = MFN_INPUT;
                 let hwc = resize_bilinear_f32(&aligned, w, h);
-                let chw = hwc_to_chw(&hwc, w, h, &MFN_MEAN, MFN_SCALE);
+                let chw = hwc_to_chw(&hwc, w, h, &MFN_MEAN, &[MFN_SCALE; 3]);
                 let input = Tensor::from_data(TensorData::new(chw, [1, 3, h, w]), device);
+                net.forward(input)?
+            }
+            // Adaptation (see enum docs): resize the aligned 128x128 RGB crop
+            // to 112x112, torchvision ImageNet normalization (per-channel).
+            Self::MobileFaceNetV2(net) => {
+                let side = MFN_V2_INPUT;
+                let hwc = resize_bilinear_f32(&aligned, side, side);
+                let chw = hwc_to_chw(&hwc, side, side, &MFN_V2_MEAN, &MFN_V2_SCALE);
+                let input = Tensor::from_data(TensorData::new(chw, [1, 3, side, side]), device);
                 net.forward(input)?
             }
             // Exact upstream path: `GetFeature.py` feeds the aligned crop in
@@ -163,15 +205,20 @@ impl<B: Backend> Embedder<B> {
 }
 
 /// The assembled detector + landmark + pose + alignment + embedding pipeline.
+///
+/// The landmark and embedder stages are optional: a **detector-only**
+/// pipeline ([`Self::detector_only`]) supports [`Self::detect`] but fails
+/// [`Self::analyze`] with [`WeightsError::MissingStage`] — used by the web
+/// demo when the non-redistributable landmark weights are absent.
 pub struct FacePipeline<B: Backend> {
     detector: SsdSlim320<B>,
-    landmark: MobileFaceNetDw<B>,
-    embedder: Embedder<B>,
+    landmark: Option<MobileFaceNetDw<B>>,
+    embedder: Option<Embedder<B>>,
     device: B::Device,
 }
 
 impl<B: Backend> FacePipeline<B> {
-    /// Assembles a pipeline from already-constructed networks.
+    /// Assembles a full pipeline from already-constructed networks.
     pub fn new(
         detector: SsdSlim320<B>,
         landmark: MobileFaceNetDw<B>,
@@ -180,10 +227,37 @@ impl<B: Backend> FacePipeline<B> {
     ) -> Self {
         Self {
             detector,
-            landmark,
-            embedder,
+            landmark: Some(landmark),
+            embedder: Some(embedder),
             device,
         }
+    }
+
+    /// Assembles a detector-only pipeline: [`Self::detect`] /
+    /// [`Self::detect_async`] work, [`Self::analyze`] errors with
+    /// [`WeightsError::MissingStage`].
+    pub fn detector_only(detector: SsdSlim320<B>, device: B::Device) -> Self {
+        Self {
+            detector,
+            landmark: None,
+            embedder: None,
+            device,
+        }
+    }
+
+    /// [`Self::detector_only`] from a raw detector safetensors buffer.
+    pub fn detector_only_from_safetensors(
+        detector_bytes: &[u8],
+        device: &B::Device,
+    ) -> Result<Self, WeightsError> {
+        let detector = SsdSlim320::new(Weights::from_safetensors(detector_bytes, device)?);
+        Ok(Self::detector_only(detector, device.clone()))
+    }
+
+    /// Whether the landmark + embedder stages are loaded (i.e. whether
+    /// [`Self::analyze`] can run the full flow).
+    pub fn is_full(&self) -> bool {
+        self.landmark.is_some() && self.embedder.is_some()
     }
 
     /// Builds the pipeline from raw safetensors buffers: the slim-320
@@ -214,6 +288,10 @@ impl<B: Backend> FacePipeline<B> {
     /// detectable faces yields an empty vector.
     pub fn analyze(&self, image: &Image, max_faces: usize) -> Result<Vec<Face>, WeightsError> {
         assert_eq!(image.channels, 3, "analyze expects an RGB8 image");
+        let embedder = self
+            .embedder
+            .as_ref()
+            .ok_or(WeightsError::MissingStage("embedder"))?;
         let detections = self.detect(image, max_faces)?;
         let mut faces = Vec::with_capacity(detections.len());
         for detection in detections {
@@ -224,7 +302,7 @@ impl<B: Backend> FacePipeline<B> {
             };
             let pose = estimate_pose(&landmarks);
             let aligned = align_vertical(image, &landmarks);
-            let mut embedding = self.embedder.embed(aligned, &self.device)?;
+            let mut embedding = embedder.embed(aligned, &self.device)?;
             l2_normalize(&mut embedding);
             faces.push(Face {
                 detection,
@@ -246,6 +324,10 @@ impl<B: Backend> FacePipeline<B> {
         max_faces: usize,
     ) -> Result<Vec<Face>, WeightsError> {
         assert_eq!(image.channels, 3, "analyze expects an RGB8 image");
+        let embedder = self
+            .embedder
+            .as_ref()
+            .ok_or(WeightsError::MissingStage("embedder"))?;
         let detections = self.detect_async(image, max_faces).await?;
         let mut faces = Vec::with_capacity(detections.len());
         for detection in detections {
@@ -254,7 +336,7 @@ impl<B: Backend> FacePipeline<B> {
             };
             let pose = estimate_pose(&landmarks);
             let aligned = align_vertical(image, &landmarks);
-            let mut embedding = self.embedder.embed_async(aligned, &self.device).await?;
+            let mut embedding = embedder.embed_async(aligned, &self.device).await?;
             l2_normalize(&mut embedding);
             faces.push(Face {
                 detection,
@@ -299,7 +381,7 @@ impl<B: Backend> FacePipeline<B> {
     fn detector_input(&self, image: &Image) -> Tensor<B, 4> {
         let [w, h] = SsdSlim320::<B>::IMAGE_SIZE;
         let hwc = resize_bilinear_f32(image, w, h);
-        let chw = hwc_to_chw(&hwc, w, h, &DETECTOR_MEAN, DETECTOR_SCALE);
+        let chw = hwc_to_chw(&hwc, w, h, &DETECTOR_MEAN, &[DETECTOR_SCALE; 3]);
         Tensor::from_data(TensorData::new(chw, [1, 3, h, w]), &self.device)
     }
 
@@ -360,14 +442,18 @@ impl<B: Backend> FacePipeline<B> {
         image: &Image,
         detection: &Detection,
     ) -> Result<Option<(Tensor<B, 2>, LandmarkCrop)>, WeightsError> {
+        let landmark = self
+            .landmark
+            .as_ref()
+            .ok_or(WeightsError::MissingStage("landmark"))?;
         let Some(crop) = LandmarkCrop::compute(image, detection) else {
             return Ok(None);
         };
         let side = LANDMARK_INPUT;
         let hwc = resize_bilinear_f32(&crop.square, side, side);
-        let chw = hwc_to_chw(&hwc, side, side, &[0.0; 3], LANDMARK_SCALE);
+        let chw = hwc_to_chw(&hwc, side, side, &[0.0; 3], &[LANDMARK_SCALE; 3]);
         let input = Tensor::from_data(TensorData::new(chw, [1, 3, side, side]), &self.device);
-        let (out, _conv_features) = self.landmark.forward(input)?;
+        let (out, _conv_features) = landmark.forward(input)?;
         Ok(Some((out, crop)))
     }
 
@@ -452,15 +538,15 @@ impl LandmarkCrop {
     }
 }
 
-/// Interleaved HWC f32 -> normalized CHW f32: `out = (v - mean[c]) * scale`
-/// (the f32 sibling of `rvface_core::image::to_chw_f32`).
-fn hwc_to_chw(hwc: &[f32], w: usize, h: usize, mean: &[f32; 3], scale: f32) -> Vec<f32> {
+/// Interleaved HWC f32 -> normalized CHW f32: `out = (v - mean[c]) * scale[c]`
+/// (the f32, per-channel-scale sibling of `rvface_core::image::to_chw_f32`).
+fn hwc_to_chw(hwc: &[f32], w: usize, h: usize, mean: &[f32; 3], scale: &[f32; 3]) -> Vec<f32> {
     debug_assert_eq!(hwc.len(), w * h * 3);
     let mut out = vec![0.0f32; 3 * h * w];
     for y in 0..h {
         for x in 0..w {
-            for (c, m) in mean.iter().enumerate() {
-                out[c * h * w + y * w + x] = (hwc[(y * w + x) * 3 + c] - m) * scale;
+            for (c, (m, s)) in mean.iter().zip(scale).enumerate() {
+                out[c * h * w + y * w + x] = (hwc[(y * w + x) * 3 + c] - m) * s;
             }
         }
     }

@@ -75,14 +75,15 @@ printf 'build-wasm: after  wasm-opt  raw=%d B  gzip=%d B\n' "$post_raw" "$post_g
 echo "== syncing weights + manifests into web/public/models/ =="
 mkdir -p "$WEB/public/models"
 
-# Redistributable base — the detector (MIT lineage) + both arch manifests
-# (repo-generated metadata). These are committed under web/public/models/ so
-# the public Pages demo ships them; a local fetch overwrites with fresh copies,
-# but an already-committed file also satisfies the requirement. Only a base
-# that is missing from BOTH locations is fatal.
+# Redistributable base — the detector (MIT lineage), the foamliu embedder
+# (Apache-2.0, models/LICENSES.md) + both arch manifests (repo-generated
+# metadata). These are committed under web/public/models/ so the public Pages
+# demo ships them; a local fetch overwrites with fresh copies, but an
+# already-committed file also satisfies the requirement. Only a base that is
+# missing from BOTH locations is fatal.
 missing=0
-for f in detector-slim320.safetensors landmark-mfn68.manifest.json \
-         embedder-mfn.manifest.json; do
+for f in detector-slim320.safetensors embedder-foamliu.safetensors \
+         landmark-mfn68.manifest.json embedder-foamliu.manifest.json; do
   if [[ -f "$ROOT/models/$f" ]]; then
     cp -f "$ROOT/models/$f" "$WEB/public/models/$f"
     echo "  synced $f"
@@ -98,16 +99,18 @@ if (( missing )); then
   exit 1
 fi
 
-# Non-redistributable weights — the landmark + embedder checkpoints publish no
-# upstream LICENSE (ADR-0003 / models/README.md), so they are never committed
-# or deployed. Sync them locally when a fetch produced them (full engine out of
-# the box); otherwise the UI drop-zone collects them from the user at runtime.
-for f in landmark-mfn68.safetensors embedder-mfn.safetensors; do
-  if [[ -f "$ROOT/models/$f" ]]; then
-    cp -f "$ROOT/models/$f" "$WEB/public/models/$f"
-    echo "  synced $f (local only — git-ignored, never deployed)"
-  else
-    echo "  note: $f absent — demo ships detector-only; supply it via the UI drop-zone" >&2
-  fi
-done
+# Non-redistributable weights — the landmark checkpoint publishes no upstream
+# LICENSE (ADR-0003 / models/README.md), so it is never committed or deployed.
+# Sync it locally when a fetch produced it (full engine out of the box);
+# otherwise the demo runs live detection (detector + embedder) and the UI
+# drop-zone collects the landmark file from the user at runtime. The Xiaoccer
+# embedder (embedder-mfn) is likewise unlicensed and is no longer referenced
+# by the web app at all.
+f=landmark-mfn68.safetensors
+if [[ -f "$ROOT/models/$f" ]]; then
+  cp -f "$ROOT/models/$f" "$WEB/public/models/$f"
+  echo "  synced $f (local only — git-ignored, never deployed)"
+else
+  echo "  note: $f absent — demo runs live detection only; supply it via the UI drop-zone" >&2
+fi
 echo "build-wasm: done — wasm in web/src/wasm/, weights in web/public/models/"

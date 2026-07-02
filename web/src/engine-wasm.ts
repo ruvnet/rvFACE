@@ -24,11 +24,17 @@
  *     x1, y1, x2, y2, score, yaw, pitch, roll,    (8)
  *     136 landmark floats (x0,y0,...),            (136)
  *     embLen, embLen embedding floats ]
+ *
+ * Partial (detect-only) mode: an empty `landmark` buffer at construction
+ * builds a detector-only engine (`rvface.mode === "detect"`); `analyze`
+ * then fills the pose + landmark slots with NaN sentinels and embLen 0,
+ * which `unpackFaces` turns into `pose: null` / empty arrays.
  */
 
 import type {
   BackendKind,
   EngineFactory,
+  EngineMode,
   FaceResult,
   RvFaceEngine,
   WeightBundle,
@@ -53,6 +59,7 @@ interface WasmModule {
 
 interface WasmRvFace {
   readonly backend: string;
+  readonly mode: string;
   analyze(
     rgba: Uint8Array,
     width: number,
@@ -80,13 +87,20 @@ function unpackFaces(packed: Float32Array): FaceResult[] {
       packed[o + 3] ?? 0,
     ];
     const score = packed[o + 4] ?? 0;
-    const pose = {
-      yaw: packed[o + 5] ?? 0,
-      pitch: packed[o + 6] ?? 0,
-      roll: packed[o + 7] ?? 0,
-    };
+    // Detect-only mode marks the pose + landmark slots with NaN sentinels.
+    const yaw = packed[o + 5] ?? 0;
+    const pose = Number.isNaN(yaw)
+      ? null
+      : {
+          yaw,
+          pitch: packed[o + 6] ?? 0,
+          roll: packed[o + 7] ?? 0,
+        };
     o += FACE_HEADER;
-    const landmarks = packed.slice(o, o + LANDMARK_FLOATS);
+    const rawLandmarks = packed.slice(o, o + LANDMARK_FLOATS);
+    const landmarks = Number.isNaN(rawLandmarks[0] ?? NaN)
+      ? new Float32Array(0)
+      : rawLandmarks;
     o += LANDMARK_FLOATS;
     const embLen = packed[o++] ?? 0;
     const embedding = packed.slice(o, o + embLen);
@@ -99,9 +113,11 @@ function unpackFaces(packed: Float32Array): FaceResult[] {
 class WasmEngine implements RvFaceEngine {
   readonly kind = 'wasm' as const;
   readonly backend: BackendKind;
+  readonly mode: EngineMode;
 
   constructor(private readonly inner: WasmRvFace) {
     this.backend = inner.backend === 'webgpu' ? 'webgpu' : 'cpu';
+    this.mode = inner.mode === 'detect' ? 'detect' : 'full';
   }
 
   async analyze(

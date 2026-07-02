@@ -1,0 +1,28 @@
+{
+  "fixture": "embedder-foamliu-real",
+  "net": "foamliu/MobileFaceNet mobilefacenet.py MobileFaceNet(): MobileNetV2-style inverted residuals, ReLU6 (plain ReLU in the dw_conv stem), GDConv 7x7, biased 1x1 head conv + BN, 128-d",
+  "weights": "real:models/embedder-foamliu.safetensors",
+  "seed": null,
+  "input_seed": 2026,
+  "input_domain": "(randint(0,256)/255 - imagenet_mean) / imagenet_std",
+  "notes": "input is HxW = 112x112; output is the raw (not L2-normalized) 128-d embedding",
+  "input_file": "embedder-foamliu-real.npz#input",
+  "output_files": [
+    "embedder-foamliu-real.npz#embedding"
+  ],
+  "shapes": {
+    "input": [
+      1,
+      3,
+      112,
+      112
+    ],
+    "embedding": [
+      1,
+      128
+    ]
+  },
+  "dtype": "float32",
+  "tolerance": 0.00022010486125946047,
+  "tolerance_rule": "max|delta| <= 1e-4 * max(1, max|output|), absolute"
+}

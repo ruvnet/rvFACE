@@ -14,13 +14,17 @@ const AXIS_Z = '#60a5fa'; // out of face  — blue
 
 const DEG = Math.PI / 180;
 
-/** Draw all faces onto `ctx` (which must already be sized to the image). */
+/** Draw all faces onto `ctx` (which must already be sized to the image).
+ *  Detect-only results (empty landmarks, null pose) render as boxes only. */
 export function drawFaces(ctx: CanvasRenderingContext2D, faces: FaceResult[]): void {
   for (const face of faces) {
-    const expr = estimateExpression(face.landmarks);
-    drawBox(ctx, face, `${face.score.toFixed(3)} · ${expr.label}`);
-    drawLandmarks(ctx, face.landmarks);
-    drawPoseGizmo(ctx, face);
+    const hasLandmarks = face.landmarks.length > 0;
+    const label = hasLandmarks
+      ? `${face.score.toFixed(3)} · ${estimateExpression(face.landmarks).label}`
+      : face.score.toFixed(3);
+    drawBox(ctx, face, label);
+    if (hasLandmarks) drawLandmarks(ctx, face.landmarks);
+    if (face.pose) drawPoseGizmo(ctx, face);
   }
 }
 
@@ -66,6 +70,7 @@ function drawLandmarks(ctx: CanvasRenderingContext2D, landmarks: Float32Array): 
  * center. Canvas y grows downward, hence the sign flips on projection.
  */
 export function drawPoseGizmo(ctx: CanvasRenderingContext2D, face: FaceResult): void {
+  if (!face.pose) return;
   const { yaw, pitch, roll } = face.pose;
   const [x1, y1, x2, y2] = face.box;
   const cx = (x1 + x2) / 2;

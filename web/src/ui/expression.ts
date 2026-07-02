@@ -90,6 +90,14 @@ export function expressionMetrics(landmarks: Float32Array): ExpressionMetrics {
  * ordered most-distinctive first.
  */
 export function estimateExpression(landmarks: FaceResult['landmarks']): ExpressionGuess {
+  // Detect-only engine mode produces empty landmark arrays — no estimate.
+  if (landmarks.length < 136) {
+    return {
+      label: 'Unknown',
+      confidence: 0,
+      metrics: { mar: 0, widthRatio: 0, smileLift: 0, browRaise: 0, ear: 0 },
+    };
+  }
   const m = expressionMetrics(landmarks);
   const clamp = (v: number): number => Math.max(0.5, Math.min(0.95, v));
 
