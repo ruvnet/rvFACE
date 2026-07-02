@@ -15,24 +15,35 @@
 //!            backend)                             // "cpu" | "webgpu"
 //!     -> Promise<RvFace>
 //! rvface.backend                                  // live backend string
+//! rvface.mode                                     // "full" | "detect"
 //! rvface.analyze(rgba, width, height, maxFaces)   // RGBA8 canvas pixels
 //!     -> Promise<Float32Array>                    // packed faces, see below
 //! rvface.similarity(a, b) -> number               // (dot + 1) * 50, 0..100
 //! rvface.free()
 //! ```
 //!
+//! # Partial (detector-only) mode
+//!
+//! Passing an **empty `landmark` buffer** to `RvFace.new` builds a
+//! detector-only pipeline (the Pages demo out of the box: the landmark
+//! weights are not redistributable, ADR-0003). `analyze` then early-returns
+//! after the detector stage: faces carry real boxes + scores, the pose and
+//! landmark slots are `NaN` sentinels and `embLen` is 0 (the `embedder`
+//! bytes are ignored — embeddings need landmark-driven alignment). The full
+//! path with all weights present is byte-identical to before.
+//!
 //! # `analyze` packing
 //!
 //! Face structs cross the JS boundary as one flat `Float32Array` (no serde
-//! round-trip, ADR-0005). Layout:
+//! round-trip, ADR-0005). Layout (identical in both modes):
 //!
 //! ```text
 //! [ nFaces,
 //!   then per face:
 //!     x1, y1, x2, y2, score,          // detector box (px) + confidence
-//!     yaw, pitch, roll,               // head pose, degrees
-//!     lx0, ly0, ... lx67, ly67,       // 68 landmarks (136 floats, px)
-//!     embLen, e0 .. e(embLen-1)       // L2-normalized embedding
+//!     yaw, pitch, roll,               // head pose, degrees (NaN in detect mode)
+//!     lx0, ly0, ... lx67, ly67,       // 68 landmarks (136 floats, px; NaN in detect mode)
+//!     embLen, e0 .. e(embLen-1)       // L2-normalized embedding (embLen 0 in detect mode)
 //! ]
 //! ```
 
@@ -42,7 +53,8 @@ use burn::tensor::backend::Backend;
 use wasm_bindgen::prelude::*;
 
 use rvface_core::image::Image;
-use rvface_models::embedder::MfnBottleneckConfig;
+use rvface_core::Detection;
+use rvface_models::embedder::{MfnBottleneckConfig, MfnV2Config};
 use rvface_models::landmark::MfnDwConfig;
 use rvface_models::weights::{Arch, MfnArch, ModelManifest};
 use rvface_models::{Embedder, Face, FacePipeline};
@@ -82,6 +94,8 @@ enum Pipeline {
 pub struct RvFace {
     pipeline: Rc<Pipeline>,
     backend: &'static str,
+    /// `"full"` (all stages) or `"detect"` (detector-only partial mode).
+    mode: &'static str,
 }
 
 #[wasm_bindgen]
@@ -90,6 +104,9 @@ impl RvFace {
     /// manifests (JSON). `backend` is `"cpu"` or `"webgpu"`; an unavailable
     /// WebGPU adapter (or a wasm build without the `webgpu` feature) falls
     /// back to CPU — check the `backend` getter for the live backend.
+    ///
+    /// An **empty `landmark` buffer** selects the detector-only partial mode
+    /// (see module docs); `embedder`/manifests may then be empty too.
     #[allow(clippy::new_ret_no_self)] // exported as the JS static `RvFace.new`
     pub async fn new(
         detector: Vec<u8>,
@@ -99,6 +116,11 @@ impl RvFace {
         embedder_manifest: String,
         backend: String,
     ) -> Result<RvFace, JsValue> {
+        let mode = if landmark.is_empty() {
+            "detect"
+        } else {
+            "full"
+        };
         match backend.as_str() {
             "cpu" => {}
             "webgpu" => {
@@ -117,6 +139,7 @@ impl RvFace {
                         return Ok(RvFace {
                             pipeline: Rc::new(Pipeline::WebGpu(pipeline)),
                             backend: "webgpu",
+                            mode,
                         });
                     }
                     Err(e) => {
@@ -150,6 +173,7 @@ impl RvFace {
         Ok(RvFace {
             pipeline: Rc::new(Pipeline::Cpu(pipeline)),
             backend: "cpu",
+            mode,
         })
     }
 
@@ -157,6 +181,13 @@ impl RvFace {
     #[wasm_bindgen(getter)]
     pub fn backend(&self) -> String {
         self.backend.to_string()
+    }
+
+    /// `"full"` when all three networks are loaded, `"detect"` in the
+    /// detector-only partial mode (empty landmark buffer at construction).
+    #[wasm_bindgen(getter)]
+    pub fn mode(&self) -> String {
+        self.mode.to_string()
     }
 
     /// Full pipeline on tightly-packed RGBA8 pixels (canvas `getImageData`
@@ -170,9 +201,26 @@ impl RvFace {
         max_faces: u32,
     ) -> js_sys::Promise {
         let pipeline = Rc::clone(&self.pipeline);
+        let detect_only = self.mode == "detect";
         wasm_bindgen_futures::future_to_promise(async move {
             let image = rgba_to_rgb(&rgba, width as usize, height as usize)
                 .map_err(|e| JsValue::from_str(&e))?;
+            // Partial mode: early-return after the detector stage (the
+            // landmark net is absent) — boxes + scores, NaN pose/landmarks.
+            if detect_only {
+                let detections = match pipeline.as_ref() {
+                    Pipeline::Cpu(p) => p
+                        .detect(&image, max_faces as usize)
+                        .map_err(|e| JsValue::from_str(&format!("detect failed: {e}")))?,
+                    #[cfg(feature = "webgpu")]
+                    Pipeline::WebGpu(p) => p
+                        .detect_async(&image, max_faces as usize)
+                        .await
+                        .map_err(|e| JsValue::from_str(&format!("detect failed: {e}")))?,
+                };
+                let packed = pack_detections(&detections);
+                return Ok(js_sys::Float32Array::from(packed.as_slice()).into());
+            }
             let faces = match pipeline.as_ref() {
                 Pipeline::Cpu(p) => p
                     .analyze(&image, max_faces as usize)
@@ -214,20 +262,37 @@ fn landmark_config(json: &str) -> Result<MfnDwConfig, String> {
     }
 }
 
-/// Parses the embedder manifest and extracts the bottleneck config.
-fn embedder_config(json: &str) -> Result<MfnBottleneckConfig, String> {
+/// Parses the embedder manifest and loads the matching [`Embedder`] variant
+/// (bottleneck/Xiaoccer or inverted-residual-v2/foamliu).
+fn load_embedder<B: Backend>(
+    bytes: &[u8],
+    json: &str,
+    device: &B::Device,
+) -> Result<Embedder<B>, String> {
     let manifest: ModelManifest =
         serde_json::from_str(json).map_err(|e| format!("parsing embedder manifest: {e}"))?;
-    match &manifest.arch {
-        Arch::MobileFaceNet(MfnArch::Bottleneck(arch)) => Ok(MfnBottleneckConfig::from_arch(arch)),
-        other => Err(format!(
-            "embedder manifest has unexpected arch family: {other:?}"
-        )),
-    }
+    let embedder = match &manifest.arch {
+        Arch::MobileFaceNet(MfnArch::Bottleneck(arch)) => Embedder::mobilefacenet_from_safetensors(
+            bytes,
+            MfnBottleneckConfig::from_arch(arch),
+            device,
+        ),
+        Arch::MobileFaceNet(MfnArch::InvertedResidualV2(arch)) => {
+            Embedder::mobilefacenet_v2_from_safetensors(bytes, MfnV2Config::from_arch(arch), device)
+        }
+        other => {
+            return Err(format!(
+                "embedder manifest has unexpected arch family: {other:?}"
+            ))
+        }
+    };
+    embedder.map_err(|e| format!("loading embedder weights: {e}"))
 }
 
 /// Manifest-driven pipeline construction on any Burn backend (mirrors
-/// `rvface-cli::load_pipeline`, from in-memory buffers only).
+/// `rvface-cli::load_pipeline`, from in-memory buffers only). An empty
+/// `landmark` buffer builds the detector-only partial pipeline (the
+/// embedder bytes/manifests are then ignored — see module docs).
 fn build_pipeline<B: Backend>(
     detector: &[u8],
     landmark: &[u8],
@@ -236,10 +301,12 @@ fn build_pipeline<B: Backend>(
     embedder_manifest: &str,
     device: &B::Device,
 ) -> Result<FacePipeline<B>, String> {
+    if landmark.is_empty() {
+        return FacePipeline::detector_only_from_safetensors(detector, device)
+            .map_err(|e| format!("loading detector weights: {e}"));
+    }
     let landmark_cfg = landmark_config(landmark_manifest)?;
-    let embedder_cfg = embedder_config(embedder_manifest)?;
-    let embedder = Embedder::mobilefacenet_from_safetensors(embedder, embedder_cfg, device)
-        .map_err(|e| format!("loading embedder weights: {e}"))?;
+    let embedder = load_embedder(embedder, embedder_manifest, device)?;
     FacePipeline::from_safetensors(detector, landmark, landmark_cfg, embedder, device)
         .map_err(|e| format!("loading detector/landmark weights: {e}"))
 }
@@ -331,6 +398,21 @@ fn rgba_to_rgb(rgba: &[u8], width: usize, height: usize) -> Result<Image, String
     Image::new(rgb, width, height, 3).map_err(|e| e.to_string())
 }
 
+/// Packs detector-only results into the same flat layout as [`pack_faces`]:
+/// real box + score, `NaN` pose and landmark slots, zero-length embedding.
+fn pack_detections(detections: &[Detection]) -> Vec<f32> {
+    let per_face = 8 + 136 + 1;
+    let mut out = Vec::with_capacity(1 + detections.len() * per_face);
+    out.push(detections.len() as f32);
+    for d in detections {
+        let b = d.bbox;
+        out.extend_from_slice(&[b.x1, b.y1, b.x2, b.y2, d.score]);
+        out.extend(std::iter::repeat_n(f32::NAN, 3 + 136)); // pose + landmarks
+        out.push(0.0); // embLen
+    }
+    out
+}
+
 /// Packs analyzed faces into the flat layout documented at module level.
 fn pack_faces(faces: &[Face]) -> Vec<f32> {
     let per_face = 8 + 136 + 1;
@@ -401,6 +483,34 @@ mod tests {
     #[test]
     fn packs_empty() {
         assert_eq!(pack_faces(&[]), vec![0.0]);
+        assert_eq!(pack_detections(&[]), vec![0.0]);
+    }
+
+    #[test]
+    fn packs_detections_with_nan_sentinels() {
+        let det = Detection {
+            bbox: BBox {
+                x1: 1.0,
+                y1: 2.0,
+                x2: 3.0,
+                y2: 4.0,
+            },
+            score: 0.5,
+        };
+        let packed = pack_detections(&[det, det]);
+        // Same fixed stride as pack_faces so one JS unpacker serves both.
+        assert_eq!(packed.len(), 1 + 2 * (8 + 136 + 1));
+        assert_eq!(packed[0], 2.0); // face count
+        for face in 0..2 {
+            let o = 1 + face * (8 + 136 + 1);
+            assert_eq!(&packed[o..o + 5], &[1.0, 2.0, 3.0, 4.0, 0.5]);
+            assert!(packed[o + 5..o + 8].iter().all(|v| v.is_nan()), "pose NaN");
+            assert!(
+                packed[o + 8..o + 8 + 136].iter().all(|v| v.is_nan()),
+                "landmarks NaN"
+            );
+            assert_eq!(packed[o + 8 + 136], 0.0, "embLen 0");
+        }
     }
 
     #[test]

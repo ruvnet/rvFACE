@@ -3,19 +3,24 @@
 //! - [`MobileFaceNetEmbedder`]: bottleneck-style MobileFaceNet
 //!   (Xiaoccer/MobileFaceNet_Pytorch `core/model.py`), 112x96 RGB input,
 //!   128-d embedding.
+//! - [`MobileFaceNetV2Embedder`][]: inverted-residual (MobileNetV2-style)
+//!   MobileFaceNet (foamliu/MobileFaceNet `mobilefacenet.py`, Apache-2.0),
+//!   112x112 RGB input, 128-d embedding.
 //! - [`Irn50`]: upstream `face_feature/irn50_pytorch.py`, 128x128 RGB input,
 //!   256-d embedding via a maxout over the two halves of a 512-d dense layer.
 //!
-//! Neither net L2-normalizes its output (upstream does not); normalization
-//! happens downstream in `rvface_core::similarity`.
+//! None of the nets L2-normalize their output (upstream does not);
+//! normalization happens downstream in `rvface_core::similarity`.
 
 use burn::tensor::activation::relu;
 use burn::tensor::backend::Backend;
 use burn::tensor::module::{avg_pool2d, max_pool2d};
 use burn::tensor::Tensor;
 
-use crate::ops::{batch_norm1d, batch_norm2d, conv2d, linear_pt, prelu, TORCH_BN_EPS};
-use crate::weights::{MfnBottleneckArch, Weights, WeightsError};
+use crate::ops::{
+    batch_norm1d, batch_norm2d, conv2d, conv2d_biased, linear_pt, prelu, relu6, TORCH_BN_EPS,
+};
+use crate::weights::{MfnBottleneckArch, MfnV2Arch, Weights, WeightsError};
 
 // ---------------------------------------------------------------------------
 // Bottleneck-style MobileFaceNet (Xiaoccer)
@@ -150,6 +155,144 @@ impl<B: Backend> MobileFaceNetEmbedder<B> {
         let x = self.conv_block(x, "linear1", 1, 0, true)?;
         let [n, c, h, w] = x.dims();
         Ok(x.reshape([n, c * h * w]))
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Inverted-residual (MobileNetV2-style) MobileFaceNet (foamliu)
+// ---------------------------------------------------------------------------
+
+/// Variant parameters of the inverted-residual MobileFaceNet.
+#[derive(Debug, Clone)]
+pub struct MfnV2Config {
+    /// `[expansion, channels, num_blocks, first_stride]` rows
+    /// (`inverted_residual_setting`).
+    pub inverted_residual_setting: Vec<[usize; 4]>,
+}
+
+impl MfnV2Config {
+    /// foamliu's `MobileFaceNet()` defaults (112x112 input, GDConv 7x7,
+    /// 128-d). The rows are identical to Xiaoccer's bottleneck setting; the
+    /// nets differ in activation (ReLU6 vs PReLU), state-dict layout and head.
+    pub fn foamliu() -> Self {
+        Self {
+            inverted_residual_setting: vec![
+                [2, 64, 5, 2],
+                [4, 128, 1, 2],
+                [2, 128, 6, 1],
+                [4, 128, 1, 2],
+                [2, 128, 2, 1],
+            ],
+        }
+    }
+
+    /// Builds the config from a manifest `arch` block.
+    pub fn from_arch(arch: &MfnV2Arch) -> Self {
+        Self {
+            inverted_residual_setting: arch.inverted_residual_setting.clone(),
+        }
+    }
+}
+
+/// Inverted-residual MobileFaceNet embedder (foamliu `mobilefacenet.py
+/// MobileFaceNet`, Apache-2.0 — the redistributable default embedder).
+pub struct MobileFaceNetV2Embedder<B: Backend> {
+    weights: Weights<B>,
+    config: MfnV2Config,
+}
+
+impl<B: Backend> MobileFaceNetV2Embedder<B> {
+    /// Wraps a loaded weight store with the variant config.
+    pub fn new(weights: Weights<B>, config: MfnV2Config) -> Self {
+        Self { weights, config }
+    }
+
+    /// `ConvBNReLU`: conv (no bias) + BN + ReLU6, keys `{prefix}.0.weight` /
+    /// `{prefix}.1.*` (`nn.Sequential` layout). Kernel size and (depthwise)
+    /// groups come from the weight shape.
+    fn conv_bn_relu6(
+        &self,
+        x: Tensor<B, 4>,
+        prefix: &str,
+        stride: usize,
+        padding: usize,
+    ) -> Result<Tensor<B, 4>, WeightsError> {
+        let w = &self.weights;
+        let x = conv2d(
+            x,
+            w,
+            &format!("{prefix}.0.weight"),
+            None,
+            [stride, stride],
+            [padding, padding],
+        )?;
+        let x = batch_norm2d(x, w, &format!("{prefix}.1"), TORCH_BN_EPS)?;
+        Ok(relu6(x))
+    }
+
+    /// `InvertedResidual` block `idx` (expansion != 1, the only layout the
+    /// shipped setting uses): 1x1 expand ConvBNReLU6, depthwise 3x3 (stride
+    /// s) ConvBNReLU6, 1x1 project + BN; identity shortcut when
+    /// `stride == 1 && inp == oup`. Keys follow `features.{i}.conv.{0..3}`.
+    fn inverted_residual(
+        &self,
+        x: Tensor<B, 4>,
+        idx: usize,
+        stride: usize,
+        connect: bool,
+    ) -> Result<Tensor<B, 4>, WeightsError> {
+        let w = &self.weights;
+        let p = format!("features.{idx}.conv");
+        let short_cut = connect.then(|| x.clone());
+        let y = self.conv_bn_relu6(x, &format!("{p}.0"), 1, 0)?;
+        let y = self.conv_bn_relu6(y, &format!("{p}.1"), stride, 1)?;
+        let y = conv2d(y, w, &format!("{p}.2.weight"), None, [1, 1], [0, 0])?;
+        let y = batch_norm2d(y, w, &format!("{p}.3"), TORCH_BN_EPS)?;
+        Ok(match short_cut {
+            Some(s) => s + y,
+            None => y,
+        })
+    }
+
+    /// Runs the network on a normalized `[N, 3, 112, 112]` RGB crop
+    /// (torchvision `ToTensor` + ImageNet `Normalize`, see the model
+    /// manifest). Returns the raw (not L2-normalized) `[N, 128]` embedding.
+    pub fn forward(&self, x: Tensor<B, 4>) -> Result<Tensor<B, 2>, WeightsError> {
+        let w = &self.weights;
+
+        // Stem: 3x3/2 ConvBNReLU6, then `DepthwiseSeparableConv` — depthwise
+        // 3x3 + BN + ReLU, pointwise 1x1 + BN + ReLU (plain ReLU, not ReLU6).
+        let x = self.conv_bn_relu6(x, "conv1", 2, 1)?;
+        let x = conv2d(x, w, "dw_conv.depthwise.weight", None, [1, 1], [1, 1])?;
+        let x = relu(batch_norm2d(x, w, "dw_conv.bn1", TORCH_BN_EPS)?);
+        let x = conv2d(x, w, "dw_conv.pointwise.weight", None, [1, 1], [0, 0])?;
+        let mut x = relu(batch_norm2d(x, w, "dw_conv.bn2", TORCH_BN_EPS)?);
+
+        // Expand the setting rows into the flat `features` block sequence.
+        let mut inplanes = 64usize;
+        let mut idx = 0usize;
+        for &[_expansion, channels, num_blocks, first_stride] in
+            &self.config.inverted_residual_setting
+        {
+            for i in 0..num_blocks {
+                let stride = if i == 0 { first_stride } else { 1 };
+                let connect = stride == 1 && inplanes == channels;
+                x = self.inverted_residual(x, idx, stride, connect)?;
+                inplanes = channels;
+                idx += 1;
+            }
+        }
+
+        // Head: 1x1 ConvBNReLU6 to 512, global depthwise conv (`GDConv`,
+        // kernel = feature-map size) + BN, biased 1x1 conv to the embedding
+        // width + BN. No activation after the head (linear embedding).
+        let x = self.conv_bn_relu6(x, "conv2", 1, 0)?;
+        let x = conv2d(x, w, "gdconv.depthwise.weight", None, [1, 1], [0, 0])?;
+        let x = batch_norm2d(x, w, "gdconv.bn", TORCH_BN_EPS)?;
+        let x = conv2d_biased(x, w, "conv3", [1, 1], [0, 0])?;
+        let x = batch_norm2d(x, w, "bn", TORCH_BN_EPS)?;
+        let [n, c, h, wd] = x.dims();
+        Ok(x.reshape([n, c * h * wd]))
     }
 }
 

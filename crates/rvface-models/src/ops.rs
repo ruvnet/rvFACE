@@ -93,6 +93,11 @@ pub(crate) fn batch_norm1d<B: Backend>(
     Ok((x - mean) / (var.add_scalar(eps).sqrt()) * gamma + beta)
 }
 
+/// `nn.ReLU6`: `min(max(x, 0), 6)`.
+pub(crate) fn relu6<B: Backend, const D: usize>(x: Tensor<B, D>) -> Tensor<B, D> {
+    x.clamp(0.0, 6.0)
+}
+
 /// PReLU with the per-channel slope tensor at `weight_key` (broadcast over
 /// dim 1, matching `nn.PReLU(num_channels)`).
 pub(crate) fn prelu<B: Backend, const D: usize>(
