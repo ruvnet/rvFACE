@@ -311,9 +311,22 @@ fn build_pipeline<B: Backend>(
         .map_err(|e| format!("loading detector/landmark weights: {e}"))
 }
 
+/// Whether the wgpu runtime has already been set up for the default device.
+///
+/// cubecl keeps a global compute-client registry keyed by device and
+/// `init_setup_async` registers into it unconditionally; a second
+/// registration for the same device panics (`cubecl-runtime`:
+/// "Client already created for device DefaultDevice"). Building a *new*
+/// `RvFace` on WebGPU — e.g. when the user toggles CPU and then WebGPU
+/// again — would otherwise hit exactly that panic. The client outlives every
+/// pipeline (freeing an `RvFace` never deregisters it), so we set up the
+/// runtime once and let later pipelines reuse the existing client.
+#[cfg(feature = "webgpu")]
+static WGPU_INITIALIZED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 /// Attempts full WebGPU initialization: feature-detect an adapter via
 /// `navigator.gpu.requestAdapter()`, then initialize Burn's wgpu runtime
-/// and build the pipeline on it.
+/// (once — see [`WGPU_INITIALIZED`]) and build the pipeline on it.
 #[cfg(feature = "webgpu")]
 async fn try_webgpu(
     detector: &[u8],
@@ -322,6 +335,8 @@ async fn try_webgpu(
     landmark_manifest: &str,
     embedder_manifest: &str,
 ) -> Result<FacePipeline<burn::backend::Wgpu>, String> {
+    use std::sync::atomic::Ordering;
+
     if !webgpu_adapter_available().await {
         return Err(
             "no WebGPU adapter (navigator.gpu absent or requestAdapter() returned null)"
@@ -329,11 +344,16 @@ async fn try_webgpu(
         );
     }
     let device = burn::backend::wgpu::WgpuDevice::default();
-    burn::backend::wgpu::init_setup_async::<burn::backend::wgpu::graphics::AutoGraphicsApi>(
-        &device,
-        Default::default(),
-    )
-    .await;
+    // Register the wgpu compute client only the first time; a re-registration
+    // for the same device panics inside cubecl. `swap` makes the check-and-set
+    // a single step so a rebuild never races into a double init.
+    if !WGPU_INITIALIZED.swap(true, Ordering::SeqCst) {
+        burn::backend::wgpu::init_setup_async::<burn::backend::wgpu::graphics::AutoGraphicsApi>(
+            &device,
+            Default::default(),
+        )
+        .await;
+    }
     build_pipeline::<burn::backend::Wgpu>(
         detector,
         landmark,
