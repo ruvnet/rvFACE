@@ -11,7 +11,7 @@ use criterion::{criterion_group, criterion_main, Criterion};
 use rvface_core::similarity::similarity;
 use rvface_core::Image;
 use rvface_models::embedder::MfnBottleneckConfig;
-use rvface_models::landmark::MfnDwConfig;
+use rvface_models::pipnet::PipnetConfig;
 use rvface_models::weights::{Arch, MfnArch, ModelManifest};
 use rvface_models::{Embedder, FacePipeline};
 
@@ -36,8 +36,8 @@ fn load_pipeline(root: &Path) -> Option<FacePipeline<B>> {
         return None;
     }
     let device = Default::default();
-    let landmark_config = match load_manifest(&models, "landmark-mfn68").arch {
-        Arch::MobileFaceNet(MfnArch::DepthwiseResidual(a)) => MfnDwConfig::from_arch(&a),
+    let landmark_config = match load_manifest(&models, "landmark-pipnet").arch {
+        Arch::Pipnet(a) => PipnetConfig::from_arch(&a),
         other => panic!("unexpected landmark arch {other:?}"),
     };
     let embedder_config = match load_manifest(&models, "embedder-mfn").arch {
@@ -53,7 +53,7 @@ fn load_pipeline(root: &Path) -> Option<FacePipeline<B>> {
     Some(
         FacePipeline::from_safetensors(
             &fs::read(models.join("detector-slim320.safetensors")).unwrap(),
-            &fs::read(models.join("landmark-mfn68.safetensors")).unwrap(),
+            &fs::read(models.join("landmark-pipnet.safetensors")).unwrap(),
             landmark_config,
             embedder,
             &device,

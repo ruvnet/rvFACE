@@ -17,6 +17,7 @@ use rvface_models::embedder::{
     Irn50, MfnBottleneckConfig, MfnV2Config, MobileFaceNetEmbedder, MobileFaceNetV2Embedder,
 };
 use rvface_models::landmark::{MfnDwConfig, MobileFaceNetDw};
+use rvface_models::pipnet::{PipnetConfig, PipnetLandmark};
 use rvface_models::weights::{Arch, MfnArch, ModelManifest, Weights};
 
 type B = NdArray;
@@ -222,6 +223,10 @@ fn tensor2_to_vec(t: Tensor<B, 2>) -> Vec<f32> {
     t.into_data().to_vec().expect("tensor to host")
 }
 
+fn tensor4_to_vec(t: Tensor<B, 4>) -> Vec<f32> {
+    t.into_data().to_vec().expect("tensor to host")
+}
+
 fn model_manifest(name: &str) -> ModelManifest {
     let path = repo_root().join(format!("models/{name}.manifest.json"));
     let json =
@@ -282,14 +287,21 @@ fn parity_landmark64_rand() {
 }
 
 #[test]
-fn parity_landmark_cunjian() {
-    // Config comes from the model manifest to exercise that path end-to-end
-    // (it must equal `MfnDwConfig::cunjian_112()`).
-    let arch = match model_manifest("landmark-mfn68").arch {
-        Arch::MobileFaceNet(MfnArch::DepthwiseResidual(arch)) => arch,
+fn parity_landmark_pipnet_real() {
+    let Some(fixture) = load_fixture("landmark-pipnet-real") else {
+        return;
+    };
+    let arch = match model_manifest("landmark-pipnet").arch {
+        Arch::Pipnet(arch) => arch,
         other => panic!("unexpected arch: {other:?}"),
     };
-    run_landmark("landmark-cunjian", MfnDwConfig::from_arch(&arch), true);
+    let net = PipnetLandmark::new(fixture.weights(), PipnetConfig::from_arch(&arch));
+    let out = net.forward(fixture.input()).expect("pipnet forward");
+    fixture.check("cls", &tensor4_to_vec(out.cls));
+    fixture.check("x", &tensor4_to_vec(out.x));
+    fixture.check("y", &tensor4_to_vec(out.y));
+    fixture.check("nb_x", &tensor4_to_vec(out.nb_x));
+    fixture.check("nb_y", &tensor4_to_vec(out.nb_y));
 }
 
 #[test]
@@ -352,7 +364,7 @@ fn index_fixtures_all_covered() {
         "detector-real",
         "detector-rand",
         "landmark64-rand",
-        "landmark-cunjian",
+        "landmark-pipnet-real",
         "irn50-rand",
         "embedder-mfn-real",
         "embedder-foamliu-real",

@@ -1,0 +1,58 @@
+{
+  "fixture": "landmark-pipnet-real",
+  "net": "torchlm/PIPNet ResNet-18 (MIT) 68-point face landmark net: stock torchvision ResNet-18 stem+trunk, five parallel 1x1 conv heads, raw score maps (no sigmoid)",
+  "weights": "real:models/landmark-pipnet.safetensors",
+  "seed": null,
+  "input_seed": 7,
+  "input_domain": "torch.randn(1,3,256,256)",
+  "notes": "input is HxW = 256x256 (PIPNet 300W crop size); outputs are the five raw ResNet-18 head score maps before any sigmoid/decoding",
+  "input_file": "landmark-pipnet-real.npz#input",
+  "output_files": [
+    "landmark-pipnet-real.npz#cls",
+    "landmark-pipnet-real.npz#x",
+    "landmark-pipnet-real.npz#y",
+    "landmark-pipnet-real.npz#nb_x",
+    "landmark-pipnet-real.npz#nb_y"
+  ],
+  "shapes": {
+    "input": [
+      1,
+      3,
+      256,
+      256
+    ],
+    "cls": [
+      1,
+      68,
+      8,
+      8
+    ],
+    "x": [
+      1,
+      68,
+      8,
+      8
+    ],
+    "y": [
+      1,
+      68,
+      8,
+      8
+    ],
+    "nb_x": [
+      1,
+      680,
+      8,
+      8
+    ],
+    "nb_y": [
+      1,
+      680,
+      8,
+      8
+    ]
+  },
+  "dtype": "float32",
+  "tolerance": 0.0005170959472656251,
+  "tolerance_rule": "max|delta| <= 1e-4 * max(1, max|output|), absolute"
+}

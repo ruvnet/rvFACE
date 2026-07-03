@@ -11,6 +11,11 @@ pub const DETECTOR_SCALE: f32 = 1.0 / 128.0;
 pub const EMBEDDER_SCALE: f32 = 1.0 / 256.0;
 /// Landmark-net input scale (crops scaled to `[0, 1]`).
 pub const LANDMARK_SCALE: f32 = 1.0 / 255.0;
+/// ImageNet per-channel mean (RGB), used by the PIPNet landmark net:
+/// `out = (pixel / 255 - mean) / std`.
+pub const IMAGENET_MEAN: [f32; 3] = [0.485, 0.456, 0.406];
+/// ImageNet per-channel standard deviation (RGB); see [`IMAGENET_MEAN`].
+pub const IMAGENET_STD: [f32; 3] = [0.229, 0.224, 0.225];
 
 /// Error for invalid image construction.
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]

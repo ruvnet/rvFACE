@@ -114,10 +114,11 @@ async function resolveFactory(): Promise<{ factory: EngineFactory; weights: Weig
     return { factory, weights };
   }
 
-  // The shipped base (detector MIT + embedder Apache-2.0) is here, only the
-  // non-redistributable landmark weights are absent (the public Pages demo).
-  // Start a detect-only engine immediately — live detection boxes out of the
-  // box — and collect the one remaining file from the user to go full.
+  // The base (detector MIT + embedder Apache-2.0) is here but the landmark
+  // weights are absent — a local-dev fallback only, since the deployed demo
+  // ships the whole pipeline and takes the `complete` branch above. Start a
+  // detect-only engine immediately — live detection boxes out of the box — and
+  // let the drop-zone collect the one remaining file to go full.
   status.log(
     `detector + embedder loaded — live detection ready; drop ${result.missing.join(', ')} ` +
       'to unlock landmarks, pose and 1:1 compare',
@@ -128,7 +129,8 @@ async function resolveFactory(): Promise<{ factory: EngineFactory; weights: Weig
   return { factory, weights };
 }
 
-/** Render the drop-zone panel for the non-redistributable landmark file. */
+/** Render the drop-zone fallback panel for a missing landmark file (only
+ *  reached in an incomplete local-dev build; the deployed demo ships it). */
 function showWeightsPanel(base: WeightBase): void {
   if (weightsPanel) return;
   weightsPanel = new WeightsPanel(app, status, (user: UserWeights) => {

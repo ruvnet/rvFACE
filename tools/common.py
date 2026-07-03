@@ -28,8 +28,9 @@ MODELS_DIR = TOOLS_DIR.parent / "models"
 FIXTURES_DIR = TOOLS_DIR / "fixtures"
 
 _SDK_RAW = "https://raw.githubusercontent.com/Faceplugin-ltd/Open-Source-Face-Recognition-SDK/main"
-_CUNJIAN_RAW = "https://raw.githubusercontent.com/cunjian/pytorch_face_landmark/master"
 _XIAOCCER_RAW = "https://raw.githubusercontent.com/Xiaoccer/MobileFaceNet_Pytorch/master"
+# PIPNet ResNet-18 landmark weights ship as a torchlm GitHub release asset (MIT).
+_TORCHLM_REL = "https://github.com/xlite-dev/torchlm/releases/download/torchlm-0.1.6-alpha"
 
 # name -> (cache-relative path, url, sha256). Pins computed 2026-07-02.
 FILES: dict[str, tuple[str, str, str]] = {
@@ -39,10 +40,13 @@ FILES: dict[str, tuple[str, str, str]] = {
         f"{_SDK_RAW}/face_detect/models/pretrained/version-slim-320.pth",
         "cd24abce45da5dbc7cfd8167cd3d5f955382dfc9d9ae9459f0026abd3c2e38a4",
     ),
-    "landmark.pth.tar": (
-        "mobilefacenet_model_best.pth.tar",
-        f"{_CUNJIAN_RAW}/checkpoint/mobilefacenet_model_best.pth.tar",
-        "b994af026bfddbafc507a6f1c8737a9896bab20ed2b0cfb6ae90b81736970313",
+    # PIPNet ResNet-18 68-point landmark net (xlite-dev/torchlm, MIT): the
+    # open-licensed, redistributable default landmark net (ADR-0003). Its
+    # torchvision resnet18 architecture is reconstructed in tools/_pipnet_ref.py.
+    "landmark.pth": (
+        "pipnet_resnet18_10x68x32x256_300w.pth",
+        f"{_TORCHLM_REL}/pipnet_resnet18_10x68x32x256_300w.pth",
+        "d51c5c5de391770e2ebd491a9af659f32f07e6edc61ec0e5f727e2d1689a781f",
     ),
     "embedder.ckpt": (
         "xiaoccer_068.ckpt",
@@ -60,11 +64,6 @@ FILES: dict[str, tuple[str, str, str]] = {
         "020ed5252b98fad3b99adf753fcf9eb1c55a24f26eb02ea54fc87e01be94b304",
     ),
     # -- third-party architecture definitions ---------------------------------
-    "cunjian_mobilefacenet.py": (
-        "cunjian_mobilefacenet.py",
-        f"{_CUNJIAN_RAW}/models/mobilefacenet.py",
-        "eb805643d9568cdae1334ec92660322af8affda1ed8ffb2bcbae4ab3368c907d",
-    ),
     "xiaoccer_model.py": (
         "xiaoccer_model.py",
         f"{_XIAOCCER_RAW}/core/model.py",
@@ -305,7 +304,7 @@ def pseudo_image(seed: int, shape: tuple[int, ...], domain: str) -> "torch.Tenso
     normalization:
 
     - ``"det"``:    (x - 127) / 128      (detector, ADR-0004)
-    - ``"unit"``:   x / 255              (cunjian landmark preprocessing)
+    - ``"unit"``:   x / 255              (64x64 grayscale landmark preprocessing)
     - ``"unit256"``: x / 256             (upstream embedder quirk, ADR-0004)
     - ``"pm1"``:    (x - 127.5) / 128    (Xiaoccer LFW eval preprocessing)
     - ``"imagenet"``: (x/255 - mean_c) / std_c, torchvision ImageNet stats

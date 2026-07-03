@@ -16,7 +16,7 @@ use rvface_core::align::{
 use rvface_core::similarity::{is_match, similarity};
 use rvface_core::Image;
 use rvface_models::embedder::{MfnBottleneckConfig, MfnV2Config};
-use rvface_models::landmark::MfnDwConfig;
+use rvface_models::pipnet::PipnetConfig;
 use rvface_models::weights::{Arch, MfnArch, ModelManifest, WeightsError};
 use rvface_models::{Embedder, Face, FacePipeline};
 
@@ -53,11 +53,11 @@ fn load_pipeline_with(embedder_name: &str) -> Option<FacePipeline<B>> {
     let device = Default::default();
     let models = repo_root().join("models");
     let detector = read_optional(&models.join("detector-slim320.safetensors"))?;
-    let landmark = read_optional(&models.join("landmark-mfn68.safetensors"))?;
+    let landmark = read_optional(&models.join("landmark-pipnet.safetensors"))?;
     let embedder = read_optional(&models.join(format!("{embedder_name}.safetensors")))?;
 
-    let landmark_config = match manifest("landmark-mfn68")?.arch {
-        Arch::MobileFaceNet(MfnArch::DepthwiseResidual(arch)) => MfnDwConfig::from_arch(&arch),
+    let landmark_config = match manifest("landmark-pipnet")?.arch {
+        Arch::Pipnet(arch) => PipnetConfig::from_arch(&arch),
         other => panic!("unexpected landmark arch: {other:?}"),
     };
     let embedder = match manifest(embedder_name)?.arch {
@@ -191,11 +191,12 @@ fn e2e_pipeline_on_upstream_test_images() {
 
     // Cross-image similarity, upstream run.py semantics (features[0] each).
     // The two demo photos are the same person and the upstream demo prints
-    // "same person"; the substitute MobileFaceNet embedder agrees. Measured
-    // 78.165 (NdArray f32, 2026-07) — asserted as a range around that value
-    // so a legitimate rebuild of the weights doesn't false-alarm, while any
-    // preprocessing regression (channel order, crop math, normalization)
-    // still trips it.
+    // "same person"; the open-licensed PIPNet landmarks (ArcFace-aligned
+    // 112x112 crop) with the legacy Xiaoccer MobileFaceNet embedder agree.
+    // Measured 82.241 (NdArray f32, 2026-07) — asserted as a range around
+    // that value so a legitimate rebuild of the weights doesn't false-alarm,
+    // while any preprocessing regression (channel order, crop math, ArcFace
+    // alignment, ImageNet normalization, PIPNet decode) still trips it.
     let score = similarity(&faces1[0].embedding, &faces2[0].embedding);
     println!("cross-image similarity (MFN embedder) = {score:.3}");
     assert!(
@@ -203,8 +204,8 @@ fn e2e_pipeline_on_upstream_test_images() {
         "cross-image score {score} <= 75: verdict no longer matches upstream's 'same person'"
     );
     assert!(
-        (76.0..81.0).contains(&score),
-        "cross-image score {score} outside the empirical range [76, 81) (measured 78.165)"
+        (80.0..85.0).contains(&score),
+        "cross-image score {score} outside the empirical range [80, 85) (measured 82.241)"
     );
 }
 
@@ -224,11 +225,14 @@ fn e2e_pipeline_foamliu_embedder() {
     check_faces("test_1.jpg (foamliu)", &faces1);
     check_faces("test_2.png (foamliu)", &faces2);
 
-    // Measured 75.302 (NdArray f32, 2026-07) on this hard cross-pose pair
-    // (test_2 is at yaw ~-30 deg; foamliu expects InsightFace-aligned crops,
-    // rvFACE feeds its eyes-level 128->112 resize). The verdict matches the
-    // upstream demo's "same person", but only barely — assert the empirical
-    // range rather than a comfortable margin, honestly.
+    // Measured 82.771 (NdArray f32, 2026-07) — this is the open-licensed
+    // default the demo ships: PIPNet landmarks + ArcFace-template 112x112
+    // alignment (the foamliu embedder's training alignment) + foamliu
+    // MobileFaceNet-V2. The verdict matches the upstream demo's "same person";
+    // asserted as a range around that value so a legitimate weight rebuild
+    // doesn't false-alarm while any preprocessing regression (channel order,
+    // crop math, ArcFace alignment, ImageNet normalization, PIPNet decode)
+    // still trips it.
     let score = similarity(&faces1[0].embedding, &faces2[0].embedding);
     println!("cross-image similarity (foamliu embedder) = {score:.3}");
     assert!(
@@ -236,12 +240,12 @@ fn e2e_pipeline_foamliu_embedder() {
         "cross-image score {score} <= 75: verdict no longer matches upstream's 'same person'"
     );
     assert!(
-        (74.0..78.0).contains(&score),
-        "cross-image score {score} outside the empirical range [74, 78) (measured 75.302)"
+        (80.0..85.0).contains(&score),
+        "cross-image score {score} outside the empirical range [80, 85) (measured 82.771)"
     );
 
     // Same-person, same-pose control: an image against its own mirror scores
-    // far above threshold (measured 97.382) — the embedding is pose-sensitive
+    // far above threshold (measured 99.090) — the embedding is pose-sensitive
     // but identity-consistent.
     let flipped = flip_horizontal(&img1);
     let faces_flip = pipeline.analyze(&flipped, 5).expect("analyze flipped");
@@ -249,7 +253,7 @@ fn e2e_pipeline_foamliu_embedder() {
     println!("mirror similarity (foamliu embedder) = {flip_score:.3}");
     assert!(
         flip_score > 90.0,
-        "mirror-pair score {flip_score} <= 90 (measured 97.382)"
+        "mirror-pair score {flip_score} <= 90 (measured 99.090)"
     );
 }
 
@@ -302,7 +306,7 @@ fn e2e_cli_compare_verdict() {
     let models = root.join("models");
     for file in [
         "detector-slim320.safetensors",
-        "landmark-mfn68.safetensors",
+        "landmark-pipnet.safetensors",
         "embedder-foamliu.safetensors",
     ] {
         if !models.join(file).exists() {

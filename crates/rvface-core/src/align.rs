@@ -189,6 +189,31 @@ pub fn align_vertical(image: &Image, landmarks: &Landmarks) -> Image {
     )
 }
 
+/// Output size of the ArcFace-style crop for the MobileFaceNet-V2 embedder.
+pub const ARCFACE_SIZE: usize = 112;
+/// Target y of both eye centers — mean of the ArcFace 112×112 template's eyes.
+pub const ARCFACE_EYE_Y: f32 = 51.5989;
+/// Target x of the eye midpoint — mean of the template's eye x.
+pub const ARCFACE_EYE_CENTER_X: f32 = 55.9132;
+/// Target inter-eye distance from the ArcFace template.
+pub const ARCFACE_EYE_DIST: f32 = 35.2372;
+
+/// ArcFace-style 112×112 alignment for the MobileFaceNet-V2 embedder: places
+/// the eye centers at the standard ArcFace template positions (the network's
+/// training alignment), keeping embeddings in-distribution. Uses the same
+/// 2-point (eye) similarity transform as [`align_vertical`].
+pub fn align_arcface(image: &Image, landmarks: &Landmarks) -> Image {
+    align_with(
+        image,
+        landmarks,
+        ARCFACE_SIZE,
+        ARCFACE_SIZE,
+        ARCFACE_EYE_Y,
+        ARCFACE_EYE_CENTER_X,
+        ARCFACE_EYE_DIST,
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
