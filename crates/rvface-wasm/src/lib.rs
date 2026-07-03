@@ -55,7 +55,7 @@ use wasm_bindgen::prelude::*;
 use rvface_core::image::Image;
 use rvface_core::Detection;
 use rvface_models::embedder::{MfnBottleneckConfig, MfnV2Config};
-use rvface_models::landmark::MfnDwConfig;
+use rvface_models::pipnet::PipnetConfig;
 use rvface_models::weights::{Arch, MfnArch, ModelManifest};
 use rvface_models::{Embedder, Face, FacePipeline};
 
@@ -250,12 +250,12 @@ impl RvFace {
     }
 }
 
-/// Parses the landmark manifest and extracts the depthwise-residual config.
-fn landmark_config(json: &str) -> Result<MfnDwConfig, String> {
+/// Parses the landmark manifest and extracts the PIPNet config.
+fn landmark_config(json: &str) -> Result<PipnetConfig, String> {
     let manifest: ModelManifest =
         serde_json::from_str(json).map_err(|e| format!("parsing landmark manifest: {e}"))?;
     match &manifest.arch {
-        Arch::MobileFaceNet(MfnArch::DepthwiseResidual(arch)) => Ok(MfnDwConfig::from_arch(arch)),
+        Arch::Pipnet(arch) => Ok(PipnetConfig::from_arch(arch)),
         other => Err(format!(
             "landmark manifest has unexpected arch family: {other:?}"
         )),

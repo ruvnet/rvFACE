@@ -12,7 +12,7 @@ use clap::{Parser, Subcommand, ValueEnum};
 use rvface_core::similarity::{is_match, similarity};
 use rvface_core::{Detection, Image, Pose};
 use rvface_models::embedder::{MfnBottleneckConfig, MfnV2Config};
-use rvface_models::landmark::MfnDwConfig;
+use rvface_models::pipnet::PipnetConfig;
 use rvface_models::weights::{Arch, MfnArch, ModelManifest};
 use rvface_models::{Embedder, Face, FacePipeline};
 
@@ -27,7 +27,7 @@ struct Cli {
     command: Command,
 
     /// Directory holding the converted weights + manifests
-    /// (detector-slim320 / landmark-mfn68 / embedder-foamliu or embedder-mfn)
+    /// (detector-slim320 / landmark-pipnet / embedder-foamliu or embedder-mfn)
     #[arg(long, global = true, value_name = "DIR", default_value = "models")]
     models_dir: PathBuf,
 
@@ -180,10 +180,10 @@ where
         })
     };
 
-    let landmark_manifest = manifest(models_dir, "landmark-mfn68")?;
+    let landmark_manifest = manifest(models_dir, "landmark-pipnet")?;
     let landmark_config = match &landmark_manifest.arch {
-        Arch::MobileFaceNet(MfnArch::DepthwiseResidual(arch)) => MfnDwConfig::from_arch(arch),
-        other => anyhow::bail!("landmark-mfn68 manifest has unexpected arch family: {other:?}"),
+        Arch::Pipnet(arch) => PipnetConfig::from_arch(arch),
+        other => anyhow::bail!("landmark-pipnet manifest has unexpected arch family: {other:?}"),
     };
 
     let embedder = match irn50 {
@@ -235,7 +235,7 @@ where
 
     Ok(FacePipeline::from_safetensors(
         &read("detector-slim320.safetensors")?,
-        &read("landmark-mfn68.safetensors")?,
+        &read("landmark-pipnet.safetensors")?,
         landmark_config,
         embedder,
         &device,

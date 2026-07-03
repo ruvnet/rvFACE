@@ -3,16 +3,18 @@
 //!
 //! Flow per image (exact upstream order): detect faces (slim-320 SSD at
 //! 320x240) -> truncate to `max_faces` (`boxes[:faceMaxCount]`) -> per face:
-//! 68-point landmarks (cunjian MobileFaceNet on a 1.2x square crop) -> head
-//! pose from the landmarks -> eyes-level 128x128 alignment -> embedding ->
-//! L2 normalization. Comparison downstream uses
+//! 68-point landmarks (PIPNet ResNet-18 on a 1.2x square crop, 256x256 RGB)
+//! -> head pose from the landmarks -> ArcFace-template 112x112 alignment ->
+//! embedding -> L2 normalization. Comparison downstream uses
 //! `rvface_core::similarity::similarity` (`(dot + 1) * 50`, threshold 75).
 //!
 //! Channel-order bookkeeping: upstream loads images with `cv2.imread` (BGR).
-//! The detector converts to RGB before preprocessing; the landmark net and
-//! the IRN-50 embedder consume BGR directly. [`FacePipeline::analyze`] takes
-//! an **RGB8** [`Image`] and performs the equivalent swaps internally, so the
-//! net effect is identical to the upstream BGR flow.
+//! The detector converts to RGB before preprocessing; the open-licensed
+//! PIPNet landmark net and the foamliu MobileFaceNet-V2 embedder are both
+//! **RGB**, ImageNet-normalized nets, so no channel swap happens on their
+//! inputs. The IRN-50 parity embedder still consumes BGR directly.
+//! [`FacePipeline::analyze`] takes an **RGB8** [`Image`] and performs the
+//! per-stage swaps internally.
 //!
 //! Everything here works from in-memory buffers only (no `std::fs`), so the
 //! module compiles unchanged for `wasm32-unknown-unknown`.
@@ -20,11 +22,11 @@
 use burn::tensor::backend::Backend;
 use burn::tensor::{Tensor, TensorData};
 
-use rvface_core::align::{align_vertical, Landmarks};
+use rvface_core::align::{align_arcface, Landmarks};
 use rvface_core::boxes::{postprocess, PostprocessParams};
 use rvface_core::image::{
     resize_bilinear_f32, swap_rb, to_chw_f32, Image, DETECTOR_MEAN, DETECTOR_SCALE, EMBEDDER_SCALE,
-    LANDMARK_SCALE,
+    IMAGENET_MEAN, IMAGENET_STD,
 };
 use rvface_core::pose::estimate_pose;
 use rvface_core::similarity::l2_normalize;
@@ -34,11 +36,14 @@ use crate::detector::SsdSlim320;
 use crate::embedder::{
     Irn50, MfnBottleneckConfig, MfnV2Config, MobileFaceNetEmbedder, MobileFaceNetV2Embedder,
 };
-use crate::landmark::{MfnDwConfig, MobileFaceNetDw};
+use crate::pipnet::{PipnetConfig, PipnetLandmark, PipnetOutputs};
+use crate::pipnet_decode_consts::{MAX_LEN, NUM_LMS, NUM_NB, REVERSE_INDEX1, REVERSE_INDEX2};
 use crate::weights::{Weights, WeightsError};
 
-/// Landmark-net input side (cunjian `MobileFaceNet([112, 112], 136)`).
-const LANDMARK_INPUT: usize = 112;
+/// PIPNet landmark-net input side (256x256 RGB, ImageNet-normalized).
+const PIPNET_INPUT: usize = 256;
+/// PIPNet score-map grid side (`input_size / net_stride = 256 / 32`).
+const PIPNET_GRID: usize = 8;
 /// Crop enlargement factor of the landmark square (`int(min(w, h) * 1.2)`).
 const LANDMARK_CROP_SCALE: f32 = 1.2;
 /// MobileFaceNet embedder input `[width, height]` (Xiaoccer, 112x96 crop).
@@ -86,7 +91,7 @@ fn serialize_landmarks<S: serde::Serializer>(
 /// - [`Embedder::Irn50`] is the **exact upstream path**
 ///   (`face_feature/GetFeature.py`): the aligned 128x128 crop is fed in the
 ///   source image's channel order — BGR upstream, since `cv2.imread` loads
-///   BGR and `align_vertical` preserves channel order — scaled by 1/256
+///   BGR and `align_arcface` preserves channel order — scaled by 1/256
 ///   (upstream divides by 256, not 255), no mean subtraction. Use it when
 ///   converted `irn50_pytorch.npy` weights are available.
 /// - [`Embedder::MobileFaceNet`] is a documented **adaptation**: the upstream
@@ -142,8 +147,8 @@ impl<B: Backend> Embedder<B> {
         Ok(Self::Irn50(Irn50::new(weights)))
     }
 
-    /// Embeds an aligned 128x128 **RGB** crop (as produced by
-    /// `align_vertical` on an RGB source). Returns the raw, not yet
+    /// Embeds an aligned 112x112 **RGB** crop (as produced by
+    /// `align_arcface` on an RGB source). Returns the raw, not yet
     /// L2-normalized embedding.
     fn embed(&self, aligned: Image, device: &B::Device) -> Result<Vec<f32>, WeightsError> {
         let raw = self.embed_raw(aligned, device)?;
@@ -212,7 +217,7 @@ impl<B: Backend> Embedder<B> {
 /// demo when the non-redistributable landmark weights are absent.
 pub struct FacePipeline<B: Backend> {
     detector: SsdSlim320<B>,
-    landmark: Option<MobileFaceNetDw<B>>,
+    landmark: Option<PipnetLandmark<B>>,
     embedder: Option<Embedder<B>>,
     device: B::Device,
 }
@@ -221,7 +226,7 @@ impl<B: Backend> FacePipeline<B> {
     /// Assembles a full pipeline from already-constructed networks.
     pub fn new(
         detector: SsdSlim320<B>,
-        landmark: MobileFaceNetDw<B>,
+        landmark: PipnetLandmark<B>,
         embedder: Embedder<B>,
         device: B::Device,
     ) -> Self {
@@ -261,19 +266,19 @@ impl<B: Backend> FacePipeline<B> {
     }
 
     /// Builds the pipeline from raw safetensors buffers: the slim-320
-    /// detector, the cunjian-112 landmark net (config usually
-    /// [`MfnDwConfig::cunjian_112`] or [`MfnDwConfig::from_arch`] on the
-    /// model manifest) and a pre-built [`Embedder`]. Wasm-friendly: bytes in,
-    /// no filesystem access.
+    /// detector, the PIPNet ResNet-18 landmark net (config from
+    /// [`PipnetConfig::from_arch`] on the model manifest, or
+    /// [`PipnetConfig::resnet18_300w`]) and a pre-built [`Embedder`].
+    /// Wasm-friendly: bytes in, no filesystem access.
     pub fn from_safetensors(
         detector_bytes: &[u8],
         landmark_bytes: &[u8],
-        landmark_config: MfnDwConfig,
+        landmark_config: PipnetConfig,
         embedder: Embedder<B>,
         device: &B::Device,
     ) -> Result<Self, WeightsError> {
         let detector = SsdSlim320::new(Weights::from_safetensors(detector_bytes, device)?);
-        let landmark = MobileFaceNetDw::new(
+        let landmark = PipnetLandmark::new(
             Weights::from_safetensors(landmark_bytes, device)?,
             landmark_config,
         );
@@ -301,7 +306,7 @@ impl<B: Backend> FacePipeline<B> {
                 continue;
             };
             let pose = estimate_pose(&landmarks);
-            let aligned = align_vertical(image, &landmarks);
+            let aligned = align_arcface(image, &landmarks);
             let mut embedding = embedder.embed(aligned, &self.device)?;
             l2_normalize(&mut embedding);
             faces.push(Face {
@@ -335,7 +340,7 @@ impl<B: Backend> FacePipeline<B> {
                 continue;
             };
             let pose = estimate_pose(&landmarks);
-            let aligned = align_vertical(image, &landmarks);
+            let aligned = align_arcface(image, &landmarks);
             let mut embedding = embedder.embed_async(aligned, &self.device).await?;
             l2_normalize(&mut embedding);
             faces.push(Face {
@@ -402,11 +407,12 @@ impl<B: Backend> FacePipeline<B> {
         detections
     }
 
-    /// Landmark stage, exactly per `tools/fixtures/landmark-cunjian.notes.md`:
-    /// 1.2x min-side square crop about the (floor-divided) box center, zero
-    /// padding where the square leaves the image, 112x112 bilinear resize,
-    /// BGR, `/255`; the [0, 1] outputs are mapped back through the padded
-    /// square's frame into source-image pixels.
+    /// Landmark stage: 1.2x min-side square crop about the (floor-divided) box
+    /// center, zero padding where the square leaves the image, 256x256
+    /// bilinear resize, RGB, ImageNet-normalized; PIPNet's five raw score maps
+    /// are decoded (argmax cell + offset + NRM neighbour merge) into 68
+    /// normalized `[0, 1]` points, then mapped back through the padded square's
+    /// frame into source-image pixels.
     fn landmarks(
         &self,
         image: &Image,
@@ -415,7 +421,14 @@ impl<B: Backend> FacePipeline<B> {
         let Some((out, crop)) = self.landmarks_raw(image, detection)? else {
             return Ok(None);
         };
-        let raw: Vec<f32> = out.into_data().to_vec().expect("landmarks to host");
+        let to_vec = |t: Tensor<B, 4>| t.into_data().to_vec::<f32>().expect("pipnet map to host");
+        let raw = decode_pipnet(
+            &to_vec(out.cls),
+            &to_vec(out.x),
+            &to_vec(out.y),
+            &to_vec(out.nb_x),
+            &to_vec(out.nb_y),
+        );
         Ok(Some(Self::reproject_landmarks(&raw, &crop)))
     }
 
@@ -428,20 +441,29 @@ impl<B: Backend> FacePipeline<B> {
         let Some((out, crop)) = self.landmarks_raw(image, detection)? else {
             return Ok(None);
         };
-        let raw: Vec<f32> = out
-            .into_data_async()
-            .await
-            .to_vec()
-            .expect("landmarks to host");
+        async fn host<B: Backend>(t: Tensor<B, 4>) -> Vec<f32> {
+            t.into_data_async()
+                .await
+                .to_vec()
+                .expect("pipnet map to host")
+        }
+        let raw = decode_pipnet(
+            &host(out.cls).await,
+            &host(out.x).await,
+            &host(out.y).await,
+            &host(out.nb_x).await,
+            &host(out.nb_y).await,
+        );
         Ok(Some(Self::reproject_landmarks(&raw, &crop)))
     }
 
-    /// Device-side landmark stage: crop + forward, output on the device.
+    /// Device-side landmark stage: crop + forward, the five raw score maps on
+    /// the device.
     fn landmarks_raw(
         &self,
         image: &Image,
         detection: &Detection,
-    ) -> Result<Option<(Tensor<B, 2>, LandmarkCrop)>, WeightsError> {
+    ) -> Result<Option<(PipnetOutputs<B>, LandmarkCrop)>, WeightsError> {
         let landmark = self
             .landmark
             .as_ref()
@@ -449,11 +471,11 @@ impl<B: Backend> FacePipeline<B> {
         let Some(crop) = LandmarkCrop::compute(image, detection) else {
             return Ok(None);
         };
-        let side = LANDMARK_INPUT;
+        let side = PIPNET_INPUT;
         let hwc = resize_bilinear_f32(&crop.square, side, side);
-        let chw = hwc_to_chw(&hwc, side, side, &[0.0; 3], &[LANDMARK_SCALE; 3]);
+        let chw = hwc_to_chw_norm(&hwc, side, side, &IMAGENET_MEAN, &IMAGENET_STD);
         let input = Tensor::from_data(TensorData::new(chw, [1, 3, side, side]), &self.device);
-        let (out, _conv_features) = landmark.forward(input)?;
+        let out = landmark.forward(input)?;
         Ok(Some((out, crop)))
     }
 
@@ -473,7 +495,7 @@ impl<B: Backend> FacePipeline<B> {
 
 /// The zero-padded square landmark crop and its position in the source image.
 struct LandmarkCrop {
-    /// BGR square crop, image content copied in, borders zero-padded.
+    /// RGB square crop, image content copied in, borders zero-padded.
     square: Image,
     /// Source-image x of the square's left edge (may be negative).
     origin_x: i64,
@@ -482,9 +504,9 @@ struct LandmarkCrop {
 }
 
 impl LandmarkCrop {
-    /// Ports the cunjian `test_batch_detections.py` crop math verbatim
-    /// (Python `int()` truncation, `//` floor division, `cv2.copyMakeBorder`
-    /// zero padding). Returns `None` for degenerate (sub-pixel) squares.
+    /// Ports the 1.2x square-crop math verbatim (Python `int()` truncation,
+    /// `//` floor division, `cv2.copyMakeBorder` zero padding). Returns `None`
+    /// for degenerate (sub-pixel) squares.
     fn compute(image: &Image, detection: &Detection) -> Option<Self> {
         let b = detection.bbox;
         let w = b.x2 - b.x1 + 1.0;
@@ -520,13 +542,13 @@ impl LandmarkCrop {
         }
         let (crop_w, crop_h) = (ix2 - ix1, iy2 - iy1);
 
-        // Assemble crop + padding in one buffer; the landmark net was trained
-        // on cv2 (BGR) crops, so swap channels while copying from RGB.
+        // Assemble crop + padding in one buffer; PIPNet is an RGB net, so copy
+        // channels straight through (no BGR swap).
         let mut square = Image::zeros(crop_w + pad_l + pad_r, crop_h + pad_t + pad_b, 3);
         for y in 0..crop_h {
             for x in 0..crop_w {
                 for c in 0..3 {
-                    square.set(x + pad_l, y + pad_t, c, image.get(ix1 + x, iy1 + y, 2 - c));
+                    square.set(x + pad_l, y + pad_t, c, image.get(ix1 + x, iy1 + y, c));
                 }
             }
         }
@@ -549,6 +571,91 @@ fn hwc_to_chw(hwc: &[f32], w: usize, h: usize, mean: &[f32; 3], scale: &[f32; 3]
                 out[c * h * w + y * w + x] = (hwc[(y * w + x) * 3 + c] - m) * s;
             }
         }
+    }
+    out
+}
+
+/// Interleaved HWC f32 -> ImageNet-normalized CHW f32:
+/// `out = (v / 255 - mean[c]) / std[c]`, laid out `[C, H, W]` (RGB). Used by
+/// the PIPNet landmark net.
+fn hwc_to_chw_norm(hwc: &[f32], w: usize, h: usize, mean: &[f32; 3], std: &[f32; 3]) -> Vec<f32> {
+    debug_assert_eq!(hwc.len(), w * h * 3);
+    let mut out = vec![0.0f32; 3 * h * w];
+    for y in 0..h {
+        for x in 0..w {
+            for c in 0..3 {
+                let v = hwc[(y * w + x) * 3 + c] / 255.0;
+                out[c * h * w + y * w + x] = (v - mean[c]) / std[c];
+            }
+        }
+    }
+    out
+}
+
+/// Decodes PIPNet's five raw score maps into 68 normalized `[0, 1]`
+/// point-major landmarks (`[x0, y0, x1, y1, ...]`), a verbatim port of
+/// torchlm's `_detecting_impl`.
+///
+/// `cls`, `ox`, `oy` are `[NUM_LMS, GRID*GRID]` row-major; `nb_x`, `nb_y` are
+/// `[NUM_LMS * NUM_NB, GRID*GRID]` (neighbour row `i * NUM_NB + j`). For each
+/// landmark: pick the argmax cell of `cls`, add the in-cell x/y offset for the
+/// landmark's own prediction and each of its `NUM_NB` neighbours, then merge
+/// (NRM) the prediction with the `MAX_LEN` reverse-neighbour votes gathered
+/// through `REVERSE_INDEX{1,2}`, averaging `1 + MAX_LEN` values.
+fn decode_pipnet(
+    cls: &[f32],
+    ox: &[f32],
+    oy: &[f32],
+    nb_x: &[f32],
+    nb_y: &[f32],
+) -> [f32; 2 * NUM_LMS] {
+    let grid = PIPNET_GRID;
+    let cells = grid * grid;
+
+    // Own prediction and per-neighbour offsets for every landmark.
+    let mut lx = [0.0f32; NUM_LMS];
+    let mut ly = [0.0f32; NUM_LMS];
+    let mut nbx = [[0.0f32; NUM_NB]; NUM_LMS];
+    let mut nby = [[0.0f32; NUM_NB]; NUM_LMS];
+    for i in 0..NUM_LMS {
+        let base = i * cells;
+        // argmax over the grid cells (first max wins ties, like torch.max).
+        let mut m = 0usize;
+        let mut best = cls[base];
+        for c in 1..cells {
+            let v = cls[base + c];
+            if v > best {
+                best = v;
+                m = c;
+            }
+        }
+        let cx = (m % grid) as f32;
+        let cy = (m / grid) as f32;
+        lx[i] = (cx + ox[base + m]) / grid as f32;
+        ly[i] = (cy + oy[base + m]) / grid as f32;
+        for j in 0..NUM_NB {
+            let r = (i * NUM_NB + j) * cells + m;
+            nbx[i][j] = (cx + nb_x[r]) / grid as f32;
+            nby[i][j] = (cy + nb_y[r]) / grid as f32;
+        }
+    }
+
+    // NRM merge: average each landmark's own prediction with its MAX_LEN
+    // reverse-neighbour votes (1 + MAX_LEN terms).
+    let mut out = [0.0f32; 2 * NUM_LMS];
+    for i in 0..NUM_LMS {
+        let mut vx = 0.0f32;
+        let mut vy = 0.0f32;
+        for k in 0..MAX_LEN {
+            let idx = i * MAX_LEN + k;
+            let l = REVERSE_INDEX1[idx];
+            let n = REVERSE_INDEX2[idx];
+            vx += nbx[l][n];
+            vy += nby[l][n];
+        }
+        let denom = 1.0 + MAX_LEN as f32;
+        out[2 * i] = (lx[i] + vx) / denom;
+        out[2 * i + 1] = (ly[i] + vy) / denom;
     }
     out
 }

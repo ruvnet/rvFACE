@@ -10,6 +10,8 @@ pub mod embedder;
 pub mod landmark;
 mod ops;
 pub mod pipeline;
+pub mod pipnet;
+mod pipnet_decode_consts;
 pub mod weights;
 
 pub use pipeline::{Embedder, Face, FacePipeline};

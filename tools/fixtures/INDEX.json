@@ -23,10 +23,10 @@
       "weights": "landmark64-rand.safetensors"
     },
     {
-      "name": "landmark-cunjian",
-      "manifest": "landmark-cunjian.json",
-      "data": "landmark-cunjian.npz",
-      "weights": "real:models/landmark-mfn68.safetensors"
+      "name": "landmark-pipnet-real",
+      "manifest": "landmark-pipnet-real.json",
+      "data": "landmark-pipnet-real.npz",
+      "weights": "real:models/landmark-pipnet.safetensors"
     },
     {
       "name": "irn50-rand",

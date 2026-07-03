@@ -7,9 +7,10 @@ DataParallel ``module.`` prefix stripped — see naming.md):
 - models/detector-slim320.safetensors  + .manifest.json
     upstream ``version-slim-320.pth`` (Ultra-Light-Fast-Generic-Face-Detector
     slim-320, MIT lineage)
-- models/landmark-mfn68.safetensors    + .manifest.json
-    cunjian/pytorch_face_landmark 68-point MobileFaceNet (112x112 RGB-shaped
-    input, fed BGR by the reference code)
+- models/landmark-pipnet.safetensors   + .manifest.json
+    xlite-dev/torchlm PIPNet ResNet-18 68-point landmark net (MIT), released
+    asset ``pipnet_resnet18_10x68x32x256_300w.pth`` (256x256 RGB, ImageNet-
+    normalized); arch reconstructed in tools/_pipnet_ref.py
 - models/embedder-foamliu.safetensors  + .manifest.json
     foamliu/MobileFaceNet release asset ``mobilefacenet.pt`` (Apache-2.0,
     MobileNetV2-style inverted-residual MobileFaceNet, 112x112 RGB, 128-d) —
@@ -44,6 +45,21 @@ from common import (
     strip_module_prefix,
     write_json,
 )
+
+
+def _load_state_dict(path) -> dict:
+    """Load a ``.pth``/``.pt`` file and return its raw state_dict.
+
+    Release assets are pinned by SHA-256 (``ensure``), so ``weights_only=False``
+    is safe here; the file may be a bare state_dict, a ``{'state_dict': ...}``
+    wrapper, or a pickled ``nn.Module``.
+    """
+    obj = torch.load(path, map_location="cpu", weights_only=False)
+    if isinstance(obj, dict):
+        return obj["state_dict"] if "state_dict" in obj else obj
+    if hasattr(obj, "state_dict"):
+        return obj.state_dict()
+    return obj
 
 
 def _manifest(name: str, source_key: str, license_: str,
@@ -100,50 +116,47 @@ def convert_detector(paths: dict) -> None:
 
 
 def convert_landmark(paths: dict) -> None:
-    ck = torch.load(paths["landmark.pth.tar"], map_location="cpu", weights_only=True)
-    sd = strip_module_prefix(ck["state_dict"])
-    # validate against the reconstructed cunjian architecture before writing
-    mfn = load_py_module(paths["cunjian_mobilefacenet.py"], "rvface_cunjian_mfn")
-    net = mfn.MobileFaceNet([112, 112], 136)
+    import _pipnet_ref
+
+    sd = strip_module_prefix(_load_state_dict(paths["landmark.pth"]))
+    # validate against the reconstructed PIPNet ResNet-18 architecture (keys must
+    # match the released state_dict exactly) before writing.
+    net = _pipnet_ref.build_pipnet()
     net.load_state_dict(sd, strict=True)
-    out = MODELS_DIR / "landmark-mfn68.safetensors"
+    out = MODELS_DIR / "landmark-pipnet.safetensors"
     tensors = save_state_dict_safetensors(sd, out)
     manifest = _manifest(
-        "landmark-mfn68", "landmark.pth.tar",
-        "no LICENSE file in cunjian/pytorch_face_landmark (MIT-lineage architecture, "
-        "insightface flavor); weights are fetched at runtime and never redistributed "
-        "with rvFACE (ADR-0003)",
+        "landmark-pipnet", "landmark.pth",
+        "MIT (xlite-dev/torchlm; PIPNet ResNet-18). Openly-licensed, redistributable "
+        "replacement for the unlicensed cunjian landmark net (ADR-0003); weights "
+        "converted verbatim from the released PyTorch state_dict (any DataParallel "
+        "'module.' prefix stripped).",
         {
-            "width": 112, "height": 112, "channels": 3, "colorspace": "bgr",
-            "mean": [0.0, 0.0, 0.0], "scale": 1.0 / 255.0,
+            "width": 256, "height": 256, "channels": 3, "colorspace": "rgb",
+            "mean": [0.485, 0.456, 0.406], "scale": 1.0,
             "layout": "nchw",
-            "note": "square crop = detector box expanded to size int(min(w,h)*1.2) "
-                    "about its center, zero-padded at image borders, resized to "
-                    "112x112 (cv2.imread BGR, cv2.resize bilinear); see "
-                    "tools/fixtures/landmark-cunjian.notes.md",
+            "note": "256x256 RGB face crop (detector box expanded 1.2x to a square, "
+                    "resized to 256x256), ImageNet-normalized: scale pixels to [0,1] "
+                    "(divide by 255), then subtract per-channel mean [0.485,0.456,0.406] "
+                    "and divide by per-channel std [0.229,0.224,0.225]. The 'mean' field "
+                    "records the ImageNet mean; the matching std division "
+                    "[0.229,0.224,0.225] is part of the same transform, applied after "
+                    "mean subtraction.",
         },
-        "tuple (landmarks [1,136] = 68 x,y pairs, point-major x0,y0,x1,y1,..., "
-        "normalized to [0,1] crop coordinates; conv_features [1,512,7,7])",
+        "five raw ResNet-18 head score maps (no sigmoid): cls [1,68,8,8], "
+        "x [1,68,8,8], y [1,68,8,8], nb_x [1,680,8,8], nb_y [1,680,8,8]; the Rust port "
+        "applies the PIPNet heatmap-argmax + x/y offset + neighbor-regression (NRM) "
+        "decode to recover the 68 landmark coordinates",
         {
-            "family": "mobilefacenet",
-            "style": "depthwise-residual",
-            "in_channels": 3,
-            "input_size": [112, 112],
-            "activation": "prelu",
-            "channels": {"conv1": 64, "conv2_dw": 64, "conv_23": 64, "conv_3": 64,
-                          "conv_34": 128, "conv_4": 128, "conv_45": 128,
-                          "conv_5": 128, "conv_6_sep": 512},
-            "groups": {"conv_23": 128, "conv_3": 128, "conv_34": 256,
-                        "conv_4": 256, "conv_45": 512, "conv_5": 256},
-            "residual_num_blocks": {"conv_3": 4, "conv_4": 6, "conv_5": 2},
-            "gdc_kernel": [7, 7],
-            "gdc_linear_bias": False,
-            "embedding_size": 136,
-            "output_dim": 136,
+            "family": "pipnet-resnet18",
+            "num_lms": 68,
+            "num_nb": 10,
+            "input_size": [256, 256],
+            "net_stride": 32,
         },
         tensors,
     )
-    write_json(MODELS_DIR / "landmark-mfn68.manifest.json", manifest)
+    write_json(MODELS_DIR / "landmark-pipnet.manifest.json", manifest)
     print(f"wrote {out} ({out.stat().st_size} bytes, {len(tensors)} tensors)")
 
 
@@ -304,8 +317,8 @@ def main() -> None:
     args = ap.parse_args()
 
     MODELS_DIR.mkdir(parents=True, exist_ok=True)
-    paths = ensure("detector.pth", "landmark.pth.tar", "embedder.ckpt",
-                   "cunjian_mobilefacenet.py", "xiaoccer_model.py",
+    paths = ensure("detector.pth", "landmark.pth", "embedder.ckpt",
+                   "xiaoccer_model.py",
                    "foamliu_embedder.pt", "foamliu_mobilefacenet.py",
                    "test_1.jpg", "test_2.png")
     if args.irn50:

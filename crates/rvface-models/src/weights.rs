@@ -221,6 +221,9 @@ pub enum Arch {
     /// Inception-ResNet-50 embedder.
     #[serde(rename = "irn50")]
     Irn50(Irn50Arch),
+    /// PIPNet ResNet-18 68-point landmark network.
+    #[serde(rename = "pipnet-resnet18")]
+    Pipnet(PipnetArch),
 }
 
 /// `family: "ultraface-ssd"` hyperparameters.
@@ -422,6 +425,20 @@ pub struct Irn50Arch {
     pub output_dim: usize,
     /// Whether the maxout head is present (always true upstream).
     pub maxout: bool,
+}
+
+/// `family: "pipnet-resnet18"` hyperparameters (torchlm PIPNet, MIT).
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct PipnetArch {
+    /// Number of landmarks (68 for the 300W meanface).
+    pub num_lms: usize,
+    /// Neighbour count per landmark (`nb_x`/`nb_y` carry `num_lms * num_nb`
+    /// channels).
+    pub num_nb: usize,
+    /// Input spatial size `[height, width]`.
+    pub input_size: [usize; 2],
+    /// Backbone total stride (input_size / feature-map size = 32).
+    pub net_stride: usize,
 }
 
 #[cfg(test)]

@@ -1,0 +1,849 @@
+{
+  "name": "landmark-pipnet",
+  "file": "landmark-pipnet.safetensors",
+  "source_url": "https://github.com/xlite-dev/torchlm/releases/download/torchlm-0.1.6-alpha/pipnet_resnet18_10x68x32x256_300w.pth",
+  "source_sha256": "d51c5c5de391770e2ebd491a9af659f32f07e6edc61ec0e5f727e2d1689a781f",
+  "license": "MIT (xlite-dev/torchlm; PIPNet ResNet-18). Openly-licensed, redistributable replacement for the unlicensed cunjian landmark net (ADR-0003); weights converted verbatim from the released PyTorch state_dict (any DataParallel 'module.' prefix stripped).",
+  "input": {
+    "width": 256,
+    "height": 256,
+    "channels": 3,
+    "colorspace": "rgb",
+    "mean": [
+      0.485,
+      0.456,
+      0.406
+    ],
+    "scale": 1.0,
+    "layout": "nchw",
+    "note": "256x256 RGB face crop (detector box expanded 1.2x to a square, resized to 256x256), ImageNet-normalized: scale pixels to [0,1] (divide by 255), then subtract per-channel mean [0.485,0.456,0.406] and divide by per-channel std [0.229,0.224,0.225]. The 'mean' field records the ImageNet mean; the matching std division [0.229,0.224,0.225] is part of the same transform, applied after mean subtraction."
+  },
+  "output": "five raw ResNet-18 head score maps (no sigmoid): cls [1,68,8,8], x [1,68,8,8], y [1,68,8,8], nb_x [1,680,8,8], nb_y [1,680,8,8]; the Rust port applies the PIPNet heatmap-argmax + x/y offset + neighbor-regression (NRM) decode to recover the 68 landmark coordinates",
+  "arch": {
+    "family": "pipnet-resnet18",
+    "num_lms": 68,
+    "num_nb": 10,
+    "input_size": [
+      256,
+      256
+    ],
+    "net_stride": 32
+  },
+  "tensors": {
+    "conv1.weight": {
+      "shape": [
+        64,
+        3,
+        7,
+        7
+      ],
+      "dtype": "float32"
+    },
+    "bn1.weight": {
+      "shape": [
+        64
+      ],
+      "dtype": "float32"
+    },
+    "bn1.bias": {
+      "shape": [
+        64
+      ],
+      "dtype": "float32"
+    },
+    "bn1.running_mean": {
+      "shape": [
+        64
+      ],
+      "dtype": "float32"
+    },
+    "bn1.running_var": {
+      "shape": [
+        64
+      ],
+      "dtype": "float32"
+    },
+    "bn1.num_batches_tracked": {
+      "shape": [],
+      "dtype": "int64"
+    },
+    "layer1.0.conv1.weight": {
+      "shape": [
+        64,
+        64,
+        3,
+        3
+      ],
+      "dtype": "float32"
+    },
+    "layer1.0.bn1.weight": {
+      "shape": [
+        64
+      ],
+      "dtype": "float32"
+    },
+    "layer1.0.bn1.bias": {
+      "shape": [
+        64
+      ],
+      "dtype": "float32"
+    },
+    "layer1.0.bn1.running_mean": {
+      "shape": [
+        64
+      ],
+      "dtype": "float32"
+    },
+    "layer1.0.bn1.running_var": {
+      "shape": [
+        64
+      ],
+      "dtype": "float32"
+    },
+    "layer1.0.bn1.num_batches_tracked": {
+      "shape": [],
+      "dtype": "int64"
+    },
+    "layer1.0.conv2.weight": {
+      "shape": [
+        64,
+        64,
+        3,
+        3
+      ],
+      "dtype": "float32"
+    },
+    "layer1.0.bn2.weight": {
+      "shape": [
+        64
+      ],
+      "dtype": "float32"
+    },
+    "layer1.0.bn2.bias": {
+      "shape": [
+        64
+      ],
+      "dtype": "float32"
+    },
+    "layer1.0.bn2.running_mean": {
+      "shape": [
+        64
+      ],
+      "dtype": "float32"
+    },
+    "layer1.0.bn2.running_var": {
+      "shape": [
+        64
+      ],
+      "dtype": "float32"
+    },
+    "layer1.0.bn2.num_batches_tracked": {
+      "shape": [],
+      "dtype": "int64"
+    },
+    "layer1.1.conv1.weight": {
+      "shape": [
+        64,
+        64,
+        3,
+        3
+      ],
+      "dtype": "float32"
+    },
+    "layer1.1.bn1.weight": {
+      "shape": [
+        64
+      ],
+      "dtype": "float32"
+    },
+    "layer1.1.bn1.bias": {
+      "shape": [
+        64
+      ],
+      "dtype": "float32"
+    },
+    "layer1.1.bn1.running_mean": {
+      "shape": [
+        64
+      ],
+      "dtype": "float32"
+    },
+    "layer1.1.bn1.running_var": {
+      "shape": [
+        64
+      ],
+      "dtype": "float32"
+    },
+    "layer1.1.bn1.num_batches_tracked": {
+      "shape": [],
+      "dtype": "int64"
+    },
+    "layer1.1.conv2.weight": {
+      "shape": [
+        64,
+        64,
+        3,
+        3
+      ],
+      "dtype": "float32"
+    },
+    "layer1.1.bn2.weight": {
+      "shape": [
+        64
+      ],
+      "dtype": "float32"
+    },
+    "layer1.1.bn2.bias": {
+      "shape": [
+        64
+      ],
+      "dtype": "float32"
+    },
+    "layer1.1.bn2.running_mean": {
+      "shape": [
+        64
+      ],
+      "dtype": "float32"
+    },
+    "layer1.1.bn2.running_var": {
+      "shape": [
+        64
+      ],
+      "dtype": "float32"
+    },
+    "layer1.1.bn2.num_batches_tracked": {
+      "shape": [],
+      "dtype": "int64"
+    },
+    "layer2.0.conv1.weight": {
+      "shape": [
+        128,
+        64,
+        3,
+        3
+      ],
+      "dtype": "float32"
+    },
+    "layer2.0.bn1.weight": {
+      "shape": [
+        128
+      ],
+      "dtype": "float32"
+    },
+    "layer2.0.bn1.bias": {
+      "shape": [
+        128
+      ],
+      "dtype": "float32"
+    },
+    "layer2.0.bn1.running_mean": {
+      "shape": [
+        128
+      ],
+      "dtype": "float32"
+    },
+    "layer2.0.bn1.running_var": {
+      "shape": [
+        128
+      ],
+      "dtype": "float32"
+    },
+    "layer2.0.bn1.num_batches_tracked": {
+      "shape": [],
+      "dtype": "int64"
+    },
+    "layer2.0.conv2.weight": {
+      "shape": [
+        128,
+        128,
+        3,
+        3
+      ],
+      "dtype": "float32"
+    },
+    "layer2.0.bn2.weight": {
+      "shape": [
+        128
+      ],
+      "dtype": "float32"
+    },
+    "layer2.0.bn2.bias": {
+      "shape": [
+        128
+      ],
+      "dtype": "float32"
+    },
+    "layer2.0.bn2.running_mean": {
+      "shape": [
+        128
+      ],
+      "dtype": "float32"
+    },
+    "layer2.0.bn2.running_var": {
+      "shape": [
+        128
+      ],
+      "dtype": "float32"
+    },
+    "layer2.0.bn2.num_batches_tracked": {
+      "shape": [],
+      "dtype": "int64"
+    },
+    "layer2.0.downsample.0.weight": {
+      "shape": [
+        128,
+        64,
+        1,
+        1
+      ],
+      "dtype": "float32"
+    },
+    "layer2.0.downsample.1.weight": {
+      "shape": [
+        128
+      ],
+      "dtype": "float32"
+    },
+    "layer2.0.downsample.1.bias": {
+      "shape": [
+        128
+      ],
+      "dtype": "float32"
+    },
+    "layer2.0.downsample.1.running_mean": {
+      "shape": [
+        128
+      ],
+      "dtype": "float32"
+    },
+    "layer2.0.downsample.1.running_var": {
+      "shape": [
+        128
+      ],
+      "dtype": "float32"
+    },
+    "layer2.0.downsample.1.num_batches_tracked": {
+      "shape": [],
+      "dtype": "int64"
+    },
+    "layer2.1.conv1.weight": {
+      "shape": [
+        128,
+        128,
+        3,
+        3
+      ],
+      "dtype": "float32"
+    },
+    "layer2.1.bn1.weight": {
+      "shape": [
+        128
+      ],
+      "dtype": "float32"
+    },
+    "layer2.1.bn1.bias": {
+      "shape": [
+        128
+      ],
+      "dtype": "float32"
+    },
+    "layer2.1.bn1.running_mean": {
+      "shape": [
+        128
+      ],
+      "dtype": "float32"
+    },
+    "layer2.1.bn1.running_var": {
+      "shape": [
+        128
+      ],
+      "dtype": "float32"
+    },
+    "layer2.1.bn1.num_batches_tracked": {
+      "shape": [],
+      "dtype": "int64"
+    },
+    "layer2.1.conv2.weight": {
+      "shape": [
+        128,
+        128,
+        3,
+        3
+      ],
+      "dtype": "float32"
+    },
+    "layer2.1.bn2.weight": {
+      "shape": [
+        128
+      ],
+      "dtype": "float32"
+    },
+    "layer2.1.bn2.bias": {
+      "shape": [
+        128
+      ],
+      "dtype": "float32"
+    },
+    "layer2.1.bn2.running_mean": {
+      "shape": [
+        128
+      ],
+      "dtype": "float32"
+    },
+    "layer2.1.bn2.running_var": {
+      "shape": [
+        128
+      ],
+      "dtype": "float32"
+    },
+    "layer2.1.bn2.num_batches_tracked": {
+      "shape": [],
+      "dtype": "int64"
+    },
+    "layer3.0.conv1.weight": {
+      "shape": [
+        256,
+        128,
+        3,
+        3
+      ],
+      "dtype": "float32"
+    },
+    "layer3.0.bn1.weight": {
+      "shape": [
+        256
+      ],
+      "dtype": "float32"
+    },
+    "layer3.0.bn1.bias": {
+      "shape": [
+        256
+      ],
+      "dtype": "float32"
+    },
+    "layer3.0.bn1.running_mean": {
+      "shape": [
+        256
+      ],
+      "dtype": "float32"
+    },
+    "layer3.0.bn1.running_var": {
+      "shape": [
+        256
+      ],
+      "dtype": "float32"
+    },
+    "layer3.0.bn1.num_batches_tracked": {
+      "shape": [],
+      "dtype": "int64"
+    },
+    "layer3.0.conv2.weight": {
+      "shape": [
+        256,
+        256,
+        3,
+        3
+      ],
+      "dtype": "float32"
+    },
+    "layer3.0.bn2.weight": {
+      "shape": [
+        256
+      ],
+      "dtype": "float32"
+    },
+    "layer3.0.bn2.bias": {
+      "shape": [
+        256
+      ],
+      "dtype": "float32"
+    },
+    "layer3.0.bn2.running_mean": {
+      "shape": [
+        256
+      ],
+      "dtype": "float32"
+    },
+    "layer3.0.bn2.running_var": {
+      "shape": [
+        256
+      ],
+      "dtype": "float32"
+    },
+    "layer3.0.bn2.num_batches_tracked": {
+      "shape": [],
+      "dtype": "int64"
+    },
+    "layer3.0.downsample.0.weight": {
+      "shape": [
+        256,
+        128,
+        1,
+        1
+      ],
+      "dtype": "float32"
+    },
+    "layer3.0.downsample.1.weight": {
+      "shape": [
+        256
+      ],
+      "dtype": "float32"
+    },
+    "layer3.0.downsample.1.bias": {
+      "shape": [
+        256
+      ],
+      "dtype": "float32"
+    },
+    "layer3.0.downsample.1.running_mean": {
+      "shape": [
+        256
+      ],
+      "dtype": "float32"
+    },
+    "layer3.0.downsample.1.running_var": {
+      "shape": [
+        256
+      ],
+      "dtype": "float32"
+    },
+    "layer3.0.downsample.1.num_batches_tracked": {
+      "shape": [],
+      "dtype": "int64"
+    },
+    "layer3.1.conv1.weight": {
+      "shape": [
+        256,
+        256,
+        3,
+        3
+      ],
+      "dtype": "float32"
+    },
+    "layer3.1.bn1.weight": {
+      "shape": [
+        256
+      ],
+      "dtype": "float32"
+    },
+    "layer3.1.bn1.bias": {
+      "shape": [
+        256
+      ],
+      "dtype": "float32"
+    },
+    "layer3.1.bn1.running_mean": {
+      "shape": [
+        256
+      ],
+      "dtype": "float32"
+    },
+    "layer3.1.bn1.running_var": {
+      "shape": [
+        256
+      ],
+      "dtype": "float32"
+    },
+    "layer3.1.bn1.num_batches_tracked": {
+      "shape": [],
+      "dtype": "int64"
+    },
+    "layer3.1.conv2.weight": {
+      "shape": [
+        256,
+        256,
+        3,
+        3
+      ],
+      "dtype": "float32"
+    },
+    "layer3.1.bn2.weight": {
+      "shape": [
+        256
+      ],
+      "dtype": "float32"
+    },
+    "layer3.1.bn2.bias": {
+      "shape": [
+        256
+      ],
+      "dtype": "float32"
+    },
+    "layer3.1.bn2.running_mean": {
+      "shape": [
+        256
+      ],
+      "dtype": "float32"
+    },
+    "layer3.1.bn2.running_var": {
+      "shape": [
+        256
+      ],
+      "dtype": "float32"
+    },
+    "layer3.1.bn2.num_batches_tracked": {
+      "shape": [],
+      "dtype": "int64"
+    },
+    "layer4.0.conv1.weight": {
+      "shape": [
+        512,
+        256,
+        3,
+        3
+      ],
+      "dtype": "float32"
+    },
+    "layer4.0.bn1.weight": {
+      "shape": [
+        512
+      ],
+      "dtype": "float32"
+    },
+    "layer4.0.bn1.bias": {
+      "shape": [
+        512
+      ],
+      "dtype": "float32"
+    },
+    "layer4.0.bn1.running_mean": {
+      "shape": [
+        512
+      ],
+      "dtype": "float32"
+    },
+    "layer4.0.bn1.running_var": {
+      "shape": [
+        512
+      ],
+      "dtype": "float32"
+    },
+    "layer4.0.bn1.num_batches_tracked": {
+      "shape": [],
+      "dtype": "int64"
+    },
+    "layer4.0.conv2.weight": {
+      "shape": [
+        512,
+        512,
+        3,
+        3
+      ],
+      "dtype": "float32"
+    },
+    "layer4.0.bn2.weight": {
+      "shape": [
+        512
+      ],
+      "dtype": "float32"
+    },
+    "layer4.0.bn2.bias": {
+      "shape": [
+        512
+      ],
+      "dtype": "float32"
+    },
+    "layer4.0.bn2.running_mean": {
+      "shape": [
+        512
+      ],
+      "dtype": "float32"
+    },
+    "layer4.0.bn2.running_var": {
+      "shape": [
+        512
+      ],
+      "dtype": "float32"
+    },
+    "layer4.0.bn2.num_batches_tracked": {
+      "shape": [],
+      "dtype": "int64"
+    },
+    "layer4.0.downsample.0.weight": {
+      "shape": [
+        512,
+        256,
+        1,
+        1
+      ],
+      "dtype": "float32"
+    },
+    "layer4.0.downsample.1.weight": {
+      "shape": [
+        512
+      ],
+      "dtype": "float32"
+    },
+    "layer4.0.downsample.1.bias": {
+      "shape": [
+        512
+      ],
+      "dtype": "float32"
+    },
+    "layer4.0.downsample.1.running_mean": {
+      "shape": [
+        512
+      ],
+      "dtype": "float32"
+    },
+    "layer4.0.downsample.1.running_var": {
+      "shape": [
+        512
+      ],
+      "dtype": "float32"
+    },
+    "layer4.0.downsample.1.num_batches_tracked": {
+      "shape": [],
+      "dtype": "int64"
+    },
+    "layer4.1.conv1.weight": {
+      "shape": [
+        512,
+        512,
+        3,
+        3
+      ],
+      "dtype": "float32"
+    },
+    "layer4.1.bn1.weight": {
+      "shape": [
+        512
+      ],
+      "dtype": "float32"
+    },
+    "layer4.1.bn1.bias": {
+      "shape": [
+        512
+      ],
+      "dtype": "float32"
+    },
+    "layer4.1.bn1.running_mean": {
+      "shape": [
+        512
+      ],
+      "dtype": "float32"
+    },
+    "layer4.1.bn1.running_var": {
+      "shape": [
+        512
+      ],
+      "dtype": "float32"
+    },
+    "layer4.1.bn1.num_batches_tracked": {
+      "shape": [],
+      "dtype": "int64"
+    },
+    "layer4.1.conv2.weight": {
+      "shape": [
+        512,
+        512,
+        3,
+        3
+      ],
+      "dtype": "float32"
+    },
+    "layer4.1.bn2.weight": {
+      "shape": [
+        512
+      ],
+      "dtype": "float32"
+    },
+    "layer4.1.bn2.bias": {
+      "shape": [
+        512
+      ],
+      "dtype": "float32"
+    },
+    "layer4.1.bn2.running_mean": {
+      "shape": [
+        512
+      ],
+      "dtype": "float32"
+    },
+    "layer4.1.bn2.running_var": {
+      "shape": [
+        512
+      ],
+      "dtype": "float32"
+    },
+    "layer4.1.bn2.num_batches_tracked": {
+      "shape": [],
+      "dtype": "int64"
+    },
+    "cls_layer.weight": {
+      "shape": [
+        68,
+        512,
+        1,
+        1
+      ],
+      "dtype": "float32"
+    },
+    "cls_layer.bias": {
+      "shape": [
+        68
+      ],
+      "dtype": "float32"
+    },
+    "x_layer.weight": {
+      "shape": [
+        68,
+        512,
+        1,
+        1
+      ],
+      "dtype": "float32"
+    },
+    "x_layer.bias": {
+      "shape": [
+        68
+      ],
+      "dtype": "float32"
+    },
+    "y_layer.weight": {
+      "shape": [
+        68,
+        512,
+        1,
+        1
+      ],
+      "dtype": "float32"
+    },
+    "y_layer.bias": {
+      "shape": [
+        68
+      ],
+      "dtype": "float32"
+    },
+    "nb_x_layer.weight": {
+      "shape": [
+        680,
+        512,
+        1,
+        1
+      ],
+      "dtype": "float32"
+    },
+    "nb_x_layer.bias": {
+      "shape": [
+        680
+      ],
+      "dtype": "float32"
+    },
+    "nb_y_layer.weight": {
+      "shape": [
+        680,
+        512,
+        1,
+        1
+      ],
+      "dtype": "float32"
+    },
+    "nb_y_layer.bias": {
+      "shape": [
+        680
+      ],
+      "dtype": "float32"
+    }
+  }
+}

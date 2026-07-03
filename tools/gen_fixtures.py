@@ -13,7 +13,7 @@ Fixtures (tools/fixtures/):
   A detector-real     slim-320 SSD, real weights, pre-NMS confidences+boxes
   B detector-rand     same net, seeded random weights (seed 1234)
   C landmark64-rand   upstream 64x64-gray MobileFaceNet-136 (seed 5678)
-  D landmark-cunjian  cunjian 112x112 MobileFaceNet-136, real checkpoint
+  D landmark-pipnet-real  PIPNet ResNet-18 (MIT), real weights, seed-7 input
   E irn50-rand        upstream IRN-50 embedder, seeded random weights (9012)
   F embedder-mfn-real Xiaoccer 112x96 MobileFaceNet-128, real checkpoint
   G embedder-foamliu-real  foamliu 112x112 inverted-residual MobileFaceNet-128,
@@ -34,6 +34,7 @@ import torch
 import common
 from common import (
     FIXTURES_DIR,
+    MODELS_DIR,
     ensure,
     fill_random_state,
     load_py_module,
@@ -170,70 +171,48 @@ def make_landmark64_fixture() -> dict:
     )
 
 
-def make_landmark_cunjian_fixture(paths) -> dict:
-    mfn = load_py_module(paths["cunjian_mobilefacenet.py"], "rvface_cunjian_mfn")
-    net = mfn.MobileFaceNet([112, 112], 136)
-    ck = torch.load(paths["landmark.pth.tar"], map_location="cpu", weights_only=True)
-    net.load_state_dict(strip_module_prefix(ck["state_dict"]), strict=True)
-    net.eval()
-    x = pseudo_image(2024, (1, 3, 112, 112), "unit")
+def _load_safetensors(name: str) -> "dict | None":
+    """Load a converted safetensors state_dict from models/, or None if absent."""
+    from safetensors.torch import load_file
+
+    path = MODELS_DIR / f"{name}.safetensors"
+    if not path.exists():
+        print(f"  skipping {name}: {path} absent — run tools/fetch_and_convert.py first")
+        return None
+    return load_file(str(path))
+
+
+def make_pipnet_fixture() -> "dict | None":
+    """PIPNet ResNet-18 (MIT) real weights on a seed-7 torch.randn(1,3,256,256).
+
+    Loads the converted models/landmark-pipnet.safetensors into the vendored
+    reference arch and records the five raw head score maps.
+    """
+    import _pipnet_ref
+
+    sd = _load_safetensors("landmark-pipnet")
+    if sd is None:
+        return None
+    net = _pipnet_ref.build_pipnet()
+    net.load_state_dict(sd, strict=True)
+    x = torch.randn(1, 3, 256, 256, generator=torch.Generator().manual_seed(7))
     with torch.no_grad():
-        landmarks, conv_features = net(x)
+        cls, ox, oy, nx, ny = net(x)
     return _save_fixture(
-        "landmark-cunjian",
-        {"input": x, "landmarks": landmarks, "conv_features": conv_features},
+        "landmark-pipnet-real",
+        {"input": x, "cls": cls, "x": ox, "y": oy, "nb_x": nx, "nb_y": ny},
         {
-            "net": "cunjian/pytorch_face_landmark models/mobilefacenet.py "
-                   "MobileFaceNet([112,112], 136): 3-channel input, PReLU, residual "
-                   "blocks 4/6/2, channels 64/128, GDC kernel 7x7, "
-                   "Linear(512,136,bias=False); forward returns (landmarks, conv_features)",
-            "weights": "real:models/landmark-mfn68.safetensors",
+            "net": "torchlm/PIPNet ResNet-18 (MIT) 68-point face landmark net: stock "
+                   "torchvision ResNet-18 stem+trunk, five parallel 1x1 conv heads, raw "
+                   "score maps (no sigmoid)",
+            "weights": "real:models/landmark-pipnet.safetensors",
             "seed": None,
-            "input_seed": 2024,
-            "input_domain": "randint(0,256) / 255",
-            "notes": "real-image preprocessing (crop enlargement, BGR, /255) documented "
-                     "in landmark-cunjian.notes.md; landmarks are normalized [0,1] crop "
-                     "coordinates, point-major x0,y0,x1,y1,...",
+            "input_seed": 7,
+            "input_domain": "torch.randn(1,3,256,256)",
+            "notes": "input is HxW = 256x256 (PIPNet 300W crop size); outputs are the "
+                     "five raw ResNet-18 head score maps before any sigmoid/decoding",
         },
     )
-
-
-CUNJIAN_NOTES = """\
-# cunjian/pytorch_face_landmark — reference preprocessing for the 68-pt MobileFaceNet
-
-Source inspected: `test_batch_detections.py` at
-https://raw.githubusercontent.com/cunjian/pytorch_face_landmark/master/test_batch_detections.py
-(the repo has no `test_camera_mobilefacenet.py`; this batch script is the
-MobileFaceNet inference reference, `--backbone MobileFaceNet` default).
-
-Model construction: `MobileFaceNet([112, 112], 136)` loading
-`checkpoint/mobilefacenet_model_best.pth.tar` (`checkpoint['state_dict']`).
-
-Per detected face box `(x1, y1, x2, y2)` on the ORIGINAL image:
-
-1. `w = x2 - x1 + 1`, `h = y2 - y1 + 1`
-2. crop enlargement: `size = int(min(w, h) * 1.2)`
-3. square box centered on the ORIGINAL box center computed with integer
-   floor-division: `cx = x1 + w // 2`, `cy = y1 + h // 2`,
-   `x1' = cx - size // 2`, `x2' = x1' + size` (same for y)
-4. the square is clipped to the image; the clipped-off amounts
-   `(dx, dy, edx, edy)` are re-added as ZERO padding via
-   `cv2.copyMakeBorder(..., cv2.BORDER_CONSTANT, 0)` so the network always
-   sees the full square
-5. resize to 112x112 with `cv2.resize` default interpolation (bilinear)
-6. normalization: `crop / 255.0` — NO mean subtraction, NO std division
-   (the mean/std branch applies to the MobileNet backbone only)
-7. channel order: the crop comes from `cv2.imread` and is never converted,
-   so the network input is BGR; layout HWC -> CHW -> 1x3x112x112 float32
-8. inference: `landmark = model(input)[0]` (first element of the
-   (landmarks, conv_features) tuple), reshaped to 68x2
-9. re-projection to image coordinates: `x = x_norm * square_w + x1'`,
-   `y = y_norm * square_h + y1'` (BBox.reprojectLandmark), i.e. the raw
-   network output is normalized [0,1] coordinates inside the padded square
-
-rvFACE follows this exactly for the landmark stage (ADR-0004 "GetLandmark:
-follows the checkpoint's reference preprocessing").
-"""
 
 
 # --------------------------------------------------------------------------- irn50
@@ -368,8 +347,8 @@ def make_embedder_foamliu_fixture(paths) -> dict:
 def main() -> None:
     FIXTURES_DIR.mkdir(parents=True, exist_ok=True)
     paths = ensure(
-        "detector.pth", "landmark.pth.tar", "embedder.ckpt",
-        "cunjian_mobilefacenet.py", "xiaoccer_model.py",
+        "detector.pth", "embedder.ckpt",
+        "xiaoccer_model.py",
         "foamliu_embedder.pt", "foamliu_mobilefacenet.py",
         "sdk/mb_tiny.py", "sdk/ssd.py", "sdk/mb_tiny_fd.py", "sdk/predictor.py",
         "sdk/data_preprocessing.py", "sdk/transforms.py", "sdk/fd_config.py",
@@ -384,8 +363,11 @@ def main() -> None:
     entries = []
     entries += make_detector_fixtures(paths)
     entries.append(make_landmark64_fixture())
-    entries.append(make_landmark_cunjian_fixture(paths))
-    (FIXTURES_DIR / "landmark-cunjian.notes.md").write_text(CUNJIAN_NOTES)
+    # PIPNet real-weight fixture loads the converted safetensors; skipped (None)
+    # when fetch_and_convert.py has not produced it yet.
+    pipnet = make_pipnet_fixture()
+    if pipnet is not None:
+        entries.append(pipnet)
     entries.append(make_irn50_fixture())
     entries.append(make_embedder_fixture(paths))
     entries.append(make_embedder_foamliu_fixture(paths))

@@ -1,11 +1,13 @@
 name: Deploy web demo to GitHub Pages
 
 # Builds the wasm engine + Vite web UI and publishes web/dist to Pages.
-# Ships the redistributable base: detector (MIT), foamliu embedder
-# (Apache-2.0, models/LICENSES.md) + arch manifests — live detection works
-# out of the box. The landmark weights (and the Xiaoccer embedder) have no
-# upstream LICENSE (ADR-0003 + addendum) and are never deployed — the UI
-# collects the landmark file from the user via a drop-zone at runtime.
+# Ships the full redistributable pipeline — all default weights are openly
+# licensed (ADR-0003): detector slim-320 (MIT), PIPNet ResNet-18 landmarks
+# (MIT) and the foamliu MobileFaceNet embedder (Apache-2.0, models/LICENSES.md)
+# + arch manifests. The deployed demo auto-loads every weight and runs the full
+# pipeline with no runtime drop-zone. The retired unlicensed checkpoints (the
+# cunjian landmark and the Xiaoccer embedder) are never deployed — CI rejects
+# them from dist.
 
 on:
   push:
@@ -78,10 +80,9 @@ jobs:
         run: cargo install wasm-bindgen-cli --version ${{ steps.wb.outputs.version }} --locked
 
       # Builds wasm (cpu+webgpu), enforces the 3.5 MiB gzip budget, and syncs
-      # the committed detector + embedder + manifests into web/public/models/.
-      # The non-redistributable landmark weights are absent here, which
-      # build-wasm.sh warns about (not fatal) — the deployed demo runs live
-      # detection out of the box + a drop-zone for the landmark file.
+      # the committed detector + PIPNet landmark + foamliu embedder weights and
+      # their manifests into web/public/models/ — the full pipeline is deployed
+      # and auto-loads, so there is no runtime drop-zone.
       - name: Build wasm engine
         run: ./web/build-wasm.sh
 
@@ -91,23 +92,24 @@ jobs:
           npm ci
           npm run build
 
-      # Guard: fail the deploy if a non-redistributable weight ever reaches
-      # dist (the cunjian landmark and the Xiaoccer embedder — no upstream
-      # LICENSE), and require the redistributable base that makes the demo
-      # work out of the box (detector MIT + embedder-foamliu Apache-2.0).
-      - name: Assert dist ships exactly the redistributable weights
+      # Guard: fail the deploy if a retired unlicensed weight ever reaches dist
+      # (the cunjian landmark or the Xiaoccer embedder — no upstream LICENSE),
+      # and require the full redistributable pipeline that makes the demo work
+      # out of the box (detector MIT + landmark-pipnet MIT + embedder-foamliu
+      # Apache-2.0).
+      - name: Assert dist ships the full redistributable pipeline
         run: |
           if find web/dist \( -name 'landmark-mfn68.safetensors' -o -name 'embedder-mfn.safetensors' \) -print | grep .; then
-            echo "::error::non-redistributable weights found in web/dist — refusing to deploy"
+            echo "::error::retired unlicensed weights found in web/dist — refusing to deploy"
             exit 1
           fi
-          for f in detector-slim320.safetensors embedder-foamliu.safetensors; do
+          for f in detector-slim320.safetensors landmark-pipnet.safetensors embedder-foamliu.safetensors; do
             if ! find web/dist -name "$f" -print | grep -q .; then
-              echo "::error::redistributable weight $f missing from web/dist — the demo would not work out of the box"
+              echo "::error::redistributable weight $f missing from web/dist — the demo would not run the full pipeline"
               exit 1
             fi
           done
-          echo "dist clean — detector (MIT) + embedder-foamliu (Apache-2.0) + manifests ship; landmark stays drop-zone"
+          echo "dist clean — full pipeline ships: detector (MIT) + landmark-pipnet (MIT) + embedder-foamliu (Apache-2.0) + manifests; no drop-zone needed"
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3

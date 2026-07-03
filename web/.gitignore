@@ -7,5 +7,6 @@ public/models/*
 !public/models/detector-slim320.safetensors
 !public/models/embedder-foamliu.safetensors
 !public/models/embedder-foamliu.manifest.json
-!public/models/landmark-mfn68.manifest.json
+!public/models/landmark-pipnet.safetensors
+!public/models/landmark-pipnet.manifest.json
 src/wasm/
