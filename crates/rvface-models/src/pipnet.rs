@@ -111,7 +111,14 @@ impl<B: Backend> PipnetLandmark<B> {
         )?;
         let out = batch_norm2d(out, w, &format!("{prefix}.bn1"), TORCH_BN_EPS)?;
         let out = relu(out);
-        let out = conv2d(out, w, &format!("{prefix}.conv2.weight"), None, [1, 1], [1, 1])?;
+        let out = conv2d(
+            out,
+            w,
+            &format!("{prefix}.conv2.weight"),
+            None,
+            [1, 1],
+            [1, 1],
+        )?;
         let out = batch_norm2d(out, w, &format!("{prefix}.bn2"), TORCH_BN_EPS)?;
 
         let identity = if downsample {
