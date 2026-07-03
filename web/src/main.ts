@@ -156,6 +156,11 @@ async function initEngine(backend: BackendKind): Promise<void> {
     }
     engine?.dispose();
     engine = next;
+    // Reflect the backend that actually initialized — wasm may have fallen
+    // back (webgpu -> cpu), and the toggle must never claim a backend that
+    // isn't running.
+    requestedBackend = engine.backend;
+    renderBackendToggle();
     status.setEngine(engine.backend, engine.kind);
     status.log(
       engine.mode === 'detect'
@@ -167,6 +172,12 @@ async function initEngine(backend: BackendKind): Promise<void> {
     comparePane.notifyEngineReady();
   } catch (err) {
     status.log(`engine init failed: ${err instanceof Error ? err.message : err}`, 'error');
+    // The previous engine is still the live one — snap the toggle back to it
+    // so the UI doesn't advertise a backend that never came up.
+    if (engine) {
+      requestedBackend = engine.backend;
+      renderBackendToggle();
+    }
   }
 }
 
